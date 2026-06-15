@@ -8,3 +8,4 @@ coverage/
 .DS_Store
 .firebase/
 .claude/scheduled_tasks.lock
+scripts/install-test/.serve-dir

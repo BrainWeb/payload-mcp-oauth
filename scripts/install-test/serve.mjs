@@ -12,18 +12,19 @@
 //                                            # OAuth issuer, so you can add the site
 //                                            # as a Custom Connector in Claude.ai
 //
-// The app lives at <tmp>/pmoauth-serve/app. It is reprovisioned from the freshly
-// packed plugin on every launch by default, so you can never click around a
-// stale build (the false-positive that masked the #33 locked-collection
-// regression — see issue #43). Pass --reuse to keep the prior install
-// (node_modules + DB) for a fast restart when you KNOW the plugin is unchanged.
-// Press Ctrl+C to stop.
+// The app lives in a randomly-created temp dir recorded in .serve-dir next to
+// this script. It is reprovisioned from the freshly packed plugin on every launch
+// by default, so you can never click around a stale build (the false-positive
+// that masked the #33 locked-collection regression — see issue #43). Pass
+// --reuse to keep the prior install (node_modules + DB) for a fast restart when
+// you KNOW the plugin is unchanged. Press Ctrl+C to stop.
 
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   ADMIN,
+  INSTALL_ROOT,
   LOCKFILE,
   freePort,
   isProvisioned,
@@ -48,7 +49,13 @@ const REUSE = process.argv.includes('--reuse')
 const LIVE = process.argv.includes('--live')
 const wantedPort = Number(argValue('--port', '3000'))
 
-const appDir = path.join(tmpdir(), 'pmoauth-serve', 'app')
+// Pointer file that records the random temp dir across --reuse invocations.
+// Lives next to this script (not inside tmpdir) so it is not subject to CWE-377.
+const SERVE_PTR = path.join(INSTALL_ROOT, '.serve-dir')
+function readServeRoot() {
+  try { return readFileSync(SERVE_PTR, 'utf8').trim() } catch { return null }
+}
+
 const lockfileSnapshot = readFileSync(LOCKFILE, 'utf8')
 
 let server
@@ -99,13 +106,21 @@ try {
     publicUrl = tunnel.url
   }
 
+  const priorRoot = readServeRoot()
+  const priorAppDir = priorRoot ? path.join(priorRoot, 'app') : null
+
+  let appDir
   let appEnv
-  if (!REUSE || !isProvisioned(appDir)) {
-    rmSync(path.dirname(appDir), { recursive: true, force: true })
-    mkdirSync(appDir, { recursive: true })
+  if (!REUSE || !priorAppDir || !isProvisioned(priorAppDir)) {
+    if (priorRoot) rmSync(priorRoot, { recursive: true, force: true })
+    const serveRoot = mkdtempSync(path.join(tmpdir(), 'pmoauth-serve-'))
+    writeFileSync(SERVE_PTR, serveRoot)
+    appDir = path.join(serveRoot, 'app')
+    mkdirSync(appDir)
     console.log('Provisioning the test site from the packed plugin (first run is slow — a full install + cold compile)…\n')
     ;({ appEnv } = await provisionApp({ appDir, port, publicUrl, log: (m) => console.log(`   • ${m}`) }))
   } else {
+    appDir = priorAppDir
     console.log(`Reusing the existing install at ${appDir} (--reuse). Drop --reuse to rebuild from the freshly packed plugin.`)
     // Re-sync the app source so the reused install reflects current repo source
     // (e.g. the proxy.ts migration) instead of whatever was copied at first
