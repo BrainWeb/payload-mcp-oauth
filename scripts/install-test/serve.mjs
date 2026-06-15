@@ -12,15 +12,15 @@
 //                                            # OAuth issuer, so you can add the site
 //                                            # as a Custom Connector in Claude.ai
 //
-// The app lives at <tmp>/pmoauth-serve/app. It is reprovisioned from the freshly
+// The app lives at <tmp>/pmoauth-serve-<uid>/app. It is reprovisioned from the freshly
 // packed plugin on every launch by default, so you can never click around a
 // stale build (the false-positive that masked the #33 locked-collection
 // regression — see issue #43). Pass --reuse to keep the prior install
 // (node_modules + DB) for a fast restart when you KNOW the plugin is unchanged.
 // Press Ctrl+C to stop.
 
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir, userInfo } from 'node:os'
 import path from 'node:path'
 import {
   ADMIN,
@@ -48,7 +48,26 @@ const REUSE = process.argv.includes('--reuse')
 const LIVE = process.argv.includes('--live')
 const wantedPort = Number(argValue('--port', '3000'))
 
-const appDir = path.join(tmpdir(), 'pmoauth-serve', 'app')
+// Scope the working dir to the current uid so it cannot be pre-owned or
+// predicted by another local user. The base dir is created with mode 0o700
+// (owner-only) and guarded against symlink hijacking (see assertSafeServeRoot).
+const SERVE_ROOT = path.join(tmpdir(), `pmoauth-serve-${userInfo().uid}`)
+const appDir = path.join(SERVE_ROOT, 'app')
+
+/** Refuse to proceed if the serve root is a pre-existing symlink (CWE-377). */
+function assertSafeServeRoot() {
+  let st
+  try {
+    st = lstatSync(SERVE_ROOT)
+  } catch {
+    return // does not exist yet — fine
+  }
+  if (st.isSymbolicLink()) {
+    throw new Error(
+      `Security: ${SERVE_ROOT} is a symbolic link — possible path-hijack attempt. Remove it manually and retry.`,
+    )
+  }
+}
 const lockfileSnapshot = readFileSync(LOCKFILE, 'utf8')
 
 let server
@@ -101,11 +120,14 @@ try {
 
   let appEnv
   if (!REUSE || !isProvisioned(appDir)) {
-    rmSync(path.dirname(appDir), { recursive: true, force: true })
-    mkdirSync(appDir, { recursive: true })
+    assertSafeServeRoot()
+    rmSync(SERVE_ROOT, { recursive: true, force: true })
+    mkdirSync(SERVE_ROOT, { mode: 0o700 })
+    mkdirSync(appDir)
     console.log('Provisioning the test site from the packed plugin (first run is slow — a full install + cold compile)…\n')
     ;({ appEnv } = await provisionApp({ appDir, port, publicUrl, log: (m) => console.log(`   • ${m}`) }))
   } else {
+    assertSafeServeRoot()
     console.log(`Reusing the existing install at ${appDir} (--reuse). Drop --reuse to rebuild from the freshly packed plugin.`)
     // Re-sync the app source so the reused install reflects current repo source
     // (e.g. the proxy.ts migration) instead of whatever was copied at first
