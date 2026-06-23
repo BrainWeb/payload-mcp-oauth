@@ -1,3 +1,24 @@
 packages:
   - 'packages/*'
   - 'examples/*'
+
+overrides:
+  hono: ">=4.12.25"
+  undici: ">=7.28.0"
+
+onlyBuiltDependencies:
+  - sharp
+  - esbuild
+  - unrs-resolver
+
+peerDependencyRules:
+  ignoreMissing:
+    - monaco-editor
+    - yjs
+  allowedVersions:
+    "mcp-handler>@modelcontextprotocol/sdk": "1.27.1"
+
+packageExtensions:
+  "@payloadcms/drizzle":
+    dependencies:
+      drizzle-kit: "0.31.7"

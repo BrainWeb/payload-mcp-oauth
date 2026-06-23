@@ -6,6 +6,8 @@ settings:
 
 packageExtensionsChecksum: 594be6e535a6d00e5de93c241fa0d4c0
 
+pnpmfileChecksum: n6u6hmpmzyd4odqhyufgx52c7a
+
 importers:
 
   .:
@@ -3245,8 +3247,8 @@ packages:
   hoist-non-react-statics@3.3.2:
     resolution: {integrity: sha512-/gGivxi8JPKWNm/W0jSmzcMPpfpPLc3dY/6GxhX2hQ9iGj3aDfklV4ET7NjKpSinLpJ5vafa9iiGIEZg10SfBw==}
 
-  hono@4.12.23:
-    resolution: {integrity: sha512-eIaZ9qDgu7XV0pxOCrg7/WhnQ6Ivm22UcxhXx/A3dcbqbbYgBEkc6e/J/s7j2tS96zoB0S9VBdLwQNCWwUo4LA==}
+  hono@4.12.27:
+    resolution: {integrity: sha512-1yrb/+w6HWQJrUCLkJ2IF5jNIPvvFkblV5RNOYl6bV+OA6p9GLcMpHFFGTosSvHvcAUibuUukRqhlYI4z32C7Q==}
     engines: {node: '>=16.9.0'}
 
   http-errors@2.0.1:
@@ -4642,8 +4644,8 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  undici@7.24.4:
-    resolution: {integrity: sha512-BM/JzwwaRXxrLdElV2Uo6cTLEjhSb3WXboncJamZ15NgUURmvlXvxa6xkwIOILIjPNo9i8ku136ZvWV0Uly8+w==}
+  undici@7.28.0:
+    resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
     engines: {node: '>=20.18.1'}
 
   unist-util-is@6.0.1:
@@ -5688,9 +5690,9 @@ snapshots:
 
   '@floating-ui/utils@0.2.11': {}
 
-  '@hono/node-server@1.19.14(hono@4.12.23)':
+  '@hono/node-server@1.19.14(hono@4.12.27)':
     dependencies:
-      hono: 4.12.23
+      hono: 4.12.27
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -6131,7 +6133,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.27.1':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.12.23)
+      '@hono/node-server': 1.19.14(hono@4.12.27)
       ajv: 8.20.0
       ajv-formats: 3.0.1
       content-type: 1.0.5
@@ -6141,7 +6143,7 @@ snapshots:
       eventsource-parser: 3.1.0
       express: 5.2.1
       express-rate-limit: 8.5.2(express@5.2.1)
-      hono: 4.12.23
+      hono: 4.12.27
       jose: 6.2.3
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -8238,7 +8240,7 @@ snapshots:
     dependencies:
       react-is: 16.13.1
 
-  hono@4.12.23: {}
+  hono@4.12.27: {}
 
   http-errors@2.0.1:
     dependencies:
@@ -9076,7 +9078,7 @@ snapshots:
       sanitize-filename: 1.6.3
       ts-essentials: 10.0.3(typescript@5.7.3)
       tsx: 4.21.0
-      undici: 7.24.4
+      undici: 7.28.0
       uuid: 13.0.2
       ws: 8.21.0
     transitivePeerDependencies:
@@ -9945,7 +9947,7 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici@7.24.4: {}
+  undici@7.28.0: {}
 
   unist-util-is@6.0.1:
     dependencies:
