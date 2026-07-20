@@ -13,11 +13,17 @@
   "commitMessagePrefix": "chore(deps):",
   "packageRules": [
     {
+      "description": "Wait 7 days after publish before proposing updates — guards against just-published malicious or unstable releases",
+      "matchPackageNames": ["*"],
+      "minimumReleaseAge": "7 days"
+    },
+    {
       "description": "Payload CMS core and plugins — separate group, no automerge (peer contract changes)",
       "matchPackageNames": ["payload"],
       "matchPackagePatterns": ["^@payloadcms/"],
       "groupName": "Payload CMS",
       "automerge": false,
+      "minimumReleaseAge": "7 days",
       "labels": ["dependencies", "payload"]
     },
     {
@@ -28,7 +34,8 @@
       "groupName": "dev dependencies",
       "automerge": true,
       "automergeType": "pr",
-      "automergeStrategy": "squash"
+      "automergeStrategy": "squash",
+      "minimumReleaseAge": "7 days"
     },
     {
       "description": "GitHub Actions — group together, automerge patch/minor",
@@ -46,7 +53,8 @@
       "excludePackagePatterns": ["^@payloadcms/"],
       "automerge": true,
       "automergeType": "pr",
-      "automergeStrategy": "squash"
+      "automergeStrategy": "squash",
+      "minimumReleaseAge": "7 days"
     }
   ]
 }

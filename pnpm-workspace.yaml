@@ -2,6 +2,14 @@ packages:
   - 'packages/*'
   - 'examples/*'
 
+# Supply-chain hardening: don't resolve packages published in the last 7
+# days (gives time for malicious/broken releases to be caught and pulled),
+# block transitive deps from untrusted sources, and never let a lockfile
+# update silently downgrade these settings.
+minimumReleaseAge: 10080
+blockExoticSubdeps: true
+trustPolicy: no-downgrade
+
 overrides:
   hono: ">=4.12.25"
   undici: ">=7.28.0"
