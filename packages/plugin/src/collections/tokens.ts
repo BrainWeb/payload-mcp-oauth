@@ -45,6 +45,35 @@ const cascadeRevokeAccessTokens: CollectionAfterChangeHook = async ({
   )
 }
 
+// How long an expired token row is kept before the sweep removes it. Expired
+// rows are useless for authentication (validateAccessToken rejects them on
+// expiry) but are worth retaining briefly so an operator can see recent activity
+// in the admin UI. Revoked rows are covered by the same rule: revocation does
+// not clear expiresAt, so a revoked token is swept once its own expiry is this
+// far in the past.
+const EXPIRED_TOKEN_RETENTION_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
+
+// Without this, `oauth-tokens` grew without bound: every refresh rotation writes
+// two new rows and nothing ever removed the superseded ones, so a long-lived
+// connection accumulated rows forever. Mirrors the sweep already run by
+// `oauth-auth-codes` / `oauth-csrf-nonces`, using a single bulk delete rather
+// than find + N deletes.
+const sweepExpiredTokens: CollectionAfterChangeHook = async ({ operation, req }) => {
+  if (operation !== 'create') return
+
+  try {
+    const cutoff = new Date(Date.now() - EXPIRED_TOKEN_RETENTION_MS).toISOString()
+    await req.payload.delete({
+      collection: 'oauth-tokens',
+      overrideAccess: true,
+      where: { expiresAt: { less_than: cutoff } },
+      req,
+    })
+  } catch {
+    // Best-effort housekeeping; never block token issuance on it.
+  }
+}
+
 export const oauthTokensCollection: CollectionConfig = {
   slug: 'oauth-tokens',
   // Server-managed — opt out of document-locking so no FK column is added to
@@ -65,7 +94,7 @@ export const oauthTokensCollection: CollectionConfig = {
   },
   timestamps: false,
   hooks: {
-    afterChange: [cascadeRevokeAccessTokens],
+    afterChange: [cascadeRevokeAccessTokens, sweepExpiredTokens],
   },
   fields: [
     {

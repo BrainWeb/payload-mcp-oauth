@@ -29,10 +29,25 @@ function makeTokenDoc(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** The row `isClientActive` finds for a client that is still switched on. */
+const ACTIVE_CLIENT_DOC = { id: 'client-doc-1', clientId: 'client-1', isActive: true }
+
+/**
+ * `validateAccessToken` issues two lookups in order: the token, then the client
+ * (to honour `isActive`). A single `mockResolvedValue` would answer both with
+ * the token row and pass for the wrong reason, so model the real sequence.
+ */
+function findTokenThenActiveClient(tokenDoc: unknown) {
+  return vi
+    .fn()
+    .mockResolvedValueOnce({ docs: [tokenDoc] })
+    .mockResolvedValueOnce({ docs: [ACTIVE_CLIENT_DOC] })
+}
+
 describe('validateAccessToken', () => {
   it('returns TokenContext for a valid token', async () => {
     const payload = makePayload({
-      find: vi.fn().mockResolvedValue({ docs: [makeTokenDoc()] }),
+      find: findTokenThenActiveClient(makeTokenDoc()),
     })
 
     const ctx = await validateAccessToken(payload as never, VALID_TOKEN)
@@ -104,5 +119,32 @@ describe('validateAccessToken', () => {
       update: vi.fn().mockRejectedValue(new Error('DB error')),
     })
     await expect(validateAccessToken(payload as never, VALID_TOKEN)).resolves.not.toBeNull()
+  })
+
+  it('rejects a live token whose client has been deactivated', async () => {
+    // Token itself is valid and unrevoked; only the client was switched off.
+    // Deactivating in the admin UI must cut access off on the next request
+    // rather than waiting out the token's remaining lifetime.
+    const payload = makePayload({
+      find: vi
+        .fn()
+        .mockResolvedValueOnce({ docs: [makeTokenDoc()] })
+        .mockResolvedValueOnce({ docs: [] }),
+    })
+
+    expect(await validateAccessToken(payload as never, VALID_TOKEN)).toBeNull()
+    // No lastUsedAt write for a rejected token.
+    expect(payload.update).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the client lookup throws', async () => {
+    const payload = makePayload({
+      find: vi
+        .fn()
+        .mockResolvedValueOnce({ docs: [makeTokenDoc()] })
+        .mockRejectedValueOnce(new Error('db down')),
+    })
+
+    expect(await validateAccessToken(payload as never, VALID_TOKEN)).toBeNull()
   })
 })

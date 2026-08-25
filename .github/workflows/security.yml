@@ -32,7 +32,27 @@ jobs:
         # --prod: audit only production dependencies. devDependencies (vitest,
         # playwright, etc.) are never shipped — the package's `files` is just
         # dist — so a dev-only advisory shouldn't gate releases.
+        #
+        # Two inputs shape this gate and both need periodic pruning:
+        #   • .pnpmfile.cjs   — minimum-version floors for transitive vulns
+        #   • package.json    — pnpm.auditConfig.ignoreCves, for advisories with
+        #                       NO patched release upstream
+        # Delete entries from either as soon as upstream catches up. A stale
+        # floor or a lingering ignore makes this job report green on a real vuln.
         run: pnpm audit --prod --audit-level high
+
+      - name: Report suppressed advisories
+        # Surfaces what the gate above deliberately ignored, so a permanently
+        # suppressed CVE stays visible in the log instead of quietly rotting.
+        if: always()
+        run: |
+          echo "Ignored CVEs (no upstream fix available):"
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs'
+            const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+            const ignored = pkg.pnpm?.auditConfig?.ignoreCves ?? []
+            console.log(ignored.length ? ignored.map((c) => '  ' + c).join('\n') : '  (none)')
+          "
 
   semgrep:
     name: Semgrep SAST

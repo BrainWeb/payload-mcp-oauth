@@ -9,3 +9,5 @@ coverage/
 .firebase/
 .claude/scheduled_tasks.lock
 scripts/install-test/.serve-dir
+# Packed tarballs — build artifacts, never source of truth
+*.tgz

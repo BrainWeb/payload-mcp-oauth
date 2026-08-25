@@ -13,14 +13,21 @@ export interface AsMetadata {
   token_endpoint_auth_methods_supported: ['none']
 }
 
-export function buildAsMetadata(baseUrl: string): AsMetadata {
+/**
+ * @param apiBase Payload's API route prefix (`config.routes.api`, default
+ *   `/api`). Hardcoding `/api` here made discovery advertise endpoints that do
+ *   not exist whenever an app customises that route, so the caller passes the
+ *   same value `plugin.ts` uses to register the endpoints.
+ */
+export function buildAsMetadata(baseUrl: string, apiBase = '/api'): AsMetadata {
   const base = baseUrl.replace(/\/$/, '')
+  const api = `${base}${apiBase.startsWith('/') ? apiBase : `/${apiBase}`}`.replace(/\/$/, '')
   return {
     issuer: base,
-    authorization_endpoint: `${base}/api/oauth/authorize`,
-    token_endpoint: `${base}/api/oauth/token`,
-    registration_endpoint: `${base}/api/oauth/register`,
-    revocation_endpoint: `${base}/api/oauth/revoke`,
+    authorization_endpoint: `${api}/oauth/authorize`,
+    token_endpoint: `${api}/oauth/token`,
+    registration_endpoint: `${api}/oauth/register`,
+    revocation_endpoint: `${api}/oauth/revoke`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
@@ -28,8 +35,8 @@ export function buildAsMetadata(baseUrl: string): AsMetadata {
   }
 }
 
-export function makeAsMetadataHandler(issuer: string): PayloadHandler {
-  const metadata = buildAsMetadata(issuer)
+export function makeAsMetadataHandler(issuer: string, apiBase = '/api'): PayloadHandler {
+  const metadata = buildAsMetadata(issuer, apiBase)
   return () =>
     jsonResponse(metadata, 200, {
       'Access-Control-Allow-Origin': '*',

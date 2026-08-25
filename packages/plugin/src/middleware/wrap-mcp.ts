@@ -22,7 +22,10 @@ export function installOverrideAuth(mcpPluginOptions: MCPPluginConfig, userColle
       return getDefaultMcpAccessSettings()
     }
 
-    req.payload.logger?.info(`[pmoauth] overrideAuth: validating token prefix=${bearer.slice(0, 18)}`)
+    // Log the KIND prefix only (`pmoauth_at_` is 11 chars). Slicing to 18 leaked
+    // 7 characters of the 43-char secret into logs on every request, which
+    // contradicts threat-model row I1 ("never log ... token values").
+    req.payload.logger?.info(`[pmoauth] overrideAuth: validating token prefix=${bearer.slice(0, 11)}`)
 
     const ctx = await validateAccessToken(req.payload, bearer)
     if (!ctx) {

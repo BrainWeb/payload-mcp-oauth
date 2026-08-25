@@ -1,4 +1,5 @@
 import type { Payload } from 'payload'
+import { isClientActive } from './clients.js'
 import { generateToken } from './token-generation.js'
 import { hashToken } from './token-storage.js'
 
@@ -20,8 +21,13 @@ export interface TokenPair {
   scope: string
 }
 
-const DEFAULT_ACCESS_TTL = 60 * 60       // 60 minutes
-const DEFAULT_REFRESH_TTL = 30 * 24 * 60 * 60 // 30 days
+// Fallbacks for direct callers only — the token endpoint always passes the
+// operator-resolved values from `PayloadMcpOAuthConfig`. These MUST stay equal
+// to the documented defaults on `accessTokenTtlSeconds` / `refreshTokenTtlSeconds`:
+// the refresh fallback used to be 30 days against a documented 1 day, so every
+// deployment issued refresh tokens with 30x the advertised lifetime.
+const DEFAULT_ACCESS_TTL = 3600  // 1 hour
+const DEFAULT_REFRESH_TTL = 86400 // 1 day
 
 export async function issueTokenPair(payload: Payload, params: IssueTokenPairParams): Promise<TokenPair> {
   const {
@@ -85,6 +91,11 @@ export async function rotateRefreshToken(
   refreshPlaintext: string,
   params: { clientId: string; accessTtlSeconds?: number; refreshTtlSeconds?: number },
 ): Promise<TokenPair | null> {
+  // A deactivated client must not be able to mint a fresh token family from a
+  // refresh token it already holds — otherwise "deactivate" only delays access
+  // by one refresh interval instead of ending it.
+  if (!(await isClientActive(payload, params.clientId))) return null
+
   const tokenHash = hashToken(refreshPlaintext)
 
   const { docs } = await payload.find({
