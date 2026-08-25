@@ -34,6 +34,31 @@
     "typescript-eslint": "8.60.0"
   },
   "pnpm": {
+    "overrides": {
+      "undici": ">=7.29.0 <8",
+      "hono": ">=4.12.34 <5",
+      "@hono/node-server": ">=1.19.15 <2",
+      "fast-uri": ">=3.1.5 <4",
+      "sharp": ">=0.35.0 <0.36",
+      "immutable": ">=4.3.9 <5",
+      "js-yaml": ">=4.3.1 <5",
+      "nanoid": ">=3.3.18 <4",
+      "ip-address": ">=10.3.1 <11",
+      "postcss": ">=8.5.23 <9",
+      "vite": ">=7.3.5 <8",
+      "body-parser": ">=2.3.0 <3",
+      "brace-expansion@<1.1.18": ">=1.1.18 <2",
+      "brace-expansion@>=4.0.0 <5.0.9": ">=5.0.9 <6",
+      "esbuild@<0.25.0": ">=0.25.0 <0.26"
+    },
+    "//overrides": "Minimum patched versions for transitive advisories, each bounded to the vulnerable major. Re-check when the Security workflow runs and DELETE any entry whose upstream has caught up \u2014 a stale override is worse than none, because it looks handled.",
+    "auditConfig": {
+      "//": "Advisories with NO patched release available upstream. Each entry MUST be re-checked when the Security workflow runs: delete it the moment a fix ships, so the --audit-level high gate keeps its teeth. Never add a CVE here just to make the gate green.",
+      "ignoreCves": [
+        "CVE-2025-71330",
+        "CVE-2025-71329"
+      ]
+    },
     "onlyBuiltDependencies": [
       "sharp",
       "esbuild",
