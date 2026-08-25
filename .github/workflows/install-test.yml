@@ -24,6 +24,11 @@ on:
       - '.github/workflows/install-test.yml'
   workflow_dispatch:
 
+# Least privilege: these jobs only read the repo. Without this the workflow
+# inherits the repository default GITHUB_TOKEN scope, which may be read/write.
+permissions:
+  contents: read
+
 jobs:
   install-test:
     name: From-scratch packaged install

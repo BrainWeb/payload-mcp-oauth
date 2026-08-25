@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: these jobs only read the repo. Without this the workflow
+# inherits the repository default GITHUB_TOKEN scope, which may be read/write.
+permissions:
+  contents: read
+
 jobs:
   quality:
     name: Node ${{ matrix.node }}
