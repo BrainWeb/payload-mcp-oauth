@@ -74,6 +74,7 @@ export interface Config {
     'oauth-clients': OauthClient;
     'oauth-auth-codes': OauthAuthCode;
     'oauth-tokens': OauthToken;
+    'oauth-csrf-nonces': OauthCsrfNonce;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -87,6 +88,7 @@ export interface Config {
     'oauth-clients': OauthClientsSelect<false> | OauthClientsSelect<true>;
     'oauth-auth-codes': OauthAuthCodesSelect<false> | OauthAuthCodesSelect<true>;
     'oauth-tokens': OauthTokensSelect<false> | OauthTokensSelect<true>;
+    'oauth-csrf-nonces': OauthCsrfNoncesSelect<false> | OauthCsrfNoncesSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -297,6 +299,8 @@ export interface OauthAuthCode {
   consumedAt?: string | null;
 }
 /**
+ * Access and refresh tokens issued via OAuth. Set "revoked at" (or delete a row) to revoke a connection. Read-only otherwise.
+ *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "oauth-tokens".
  */
@@ -338,6 +342,19 @@ export interface OauthToken {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "oauth-csrf-nonces".
+ */
+export interface OauthCsrfNonce {
+  id: number;
+  nonceHash: string;
+  userId: string;
+  expiresAt: string;
+  consumedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -371,18 +388,6 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'payload-mcp-api-keys';
         value: number | PayloadMcpApiKey;
-      } | null)
-    | ({
-        relationTo: 'oauth-clients';
-        value: number | OauthClient;
-      } | null)
-    | ({
-        relationTo: 'oauth-auth-codes';
-        value: number | OauthAuthCode;
-      } | null)
-    | ({
-        relationTo: 'oauth-tokens';
-        value: number | OauthToken;
       } | null);
   globalSlug?: string | null;
   user:
@@ -555,6 +560,18 @@ export interface OauthTokensSelect<T extends boolean = true> {
   revokedAt?: T;
   lastUsedAt?: T;
   parentTokenId?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "oauth-csrf-nonces_select".
+ */
+export interface OauthCsrfNoncesSelect<T extends boolean = true> {
+  nonceHash?: T;
+  userId?: T;
+  expiresAt?: T;
+  consumedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
