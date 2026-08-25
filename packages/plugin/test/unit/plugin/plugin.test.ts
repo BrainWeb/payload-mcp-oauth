@@ -205,6 +205,27 @@ describe('buildPlugin — admin access gate', () => {
     expect(read(adminReq('users'))).toBe(false)
   })
 
+  it('denies a non-admin member of the user collection when roles exist', () => {
+    // The old default was collection membership alone, which in a single-`users`
+    // app is effectively Boolean(req.user) — any logged-in end user could rewrite
+    // a client's redirectUris or delete other users' tokens.
+    const result = buildPlugin(makeConfig(), makeOptions())
+    const read = coll(result, 'oauth-clients')?.access?.read as AccessFn
+
+    expect(read({ req: { user: { collection: 'users', role: 'editor' } } })).toBe(false)
+    expect(read({ req: { user: { collection: 'users', role: 'admin' } } })).toBe(true)
+    expect(read({ req: { user: { collection: 'users', isAdmin: false } } })).toBe(false)
+    expect(read({ req: { user: { collection: 'users', roles: ['editor'] } } })).toBe(false)
+    expect(read({ req: { user: { collection: 'users', roles: ['admin'] } } })).toBe(true)
+  })
+
+  it('still authorises collection members when the collection has no role field', () => {
+    // Default Payload starters have no role field — they must not be locked out.
+    const result = buildPlugin(makeConfig(), makeOptions())
+    const read = coll(result, 'oauth-clients')?.access?.read as AccessFn
+    expect(read({ req: { user: { collection: 'users', email: 'op@example.com' } } })).toBe(true)
+  })
+
   it('honours a custom adminAccess override', () => {
     let called = false
     const custom = () => {

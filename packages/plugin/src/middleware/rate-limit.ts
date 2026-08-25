@@ -45,6 +45,8 @@ export interface RateLimitStore {
   authorize: RateLimiter
   token: RateLimiter
   revoke: RateLimiter
+  /** `/oauth/consent` mints authorization codes, so it needs a ceiling too. */
+  consent: RateLimiter
 }
 
 export interface RateLimitOptions {
@@ -52,6 +54,7 @@ export interface RateLimitOptions {
   authorize?: Partial<RateLimitConfig>
   token?: Partial<RateLimitConfig>
   revoke?: Partial<RateLimitConfig>
+  consent?: Partial<RateLimitConfig>
 }
 
 const DEFAULTS: Record<keyof RateLimitStore, RateLimitConfig> = {
@@ -59,6 +62,7 @@ const DEFAULTS: Record<keyof RateLimitStore, RateLimitConfig> = {
   authorize: { windowMs: 60_000, maxRequests: 60 },
   token: { windowMs: 60_000, maxRequests: 60 },
   revoke: { windowMs: 60_000, maxRequests: 60 },
+  consent: { windowMs: 60_000, maxRequests: 30 },
 }
 
 export function createRateLimitStore(overrides: RateLimitOptions = {}): RateLimitStore {
@@ -67,6 +71,7 @@ export function createRateLimitStore(overrides: RateLimitOptions = {}): RateLimi
     authorize: createRateLimiter({ ...DEFAULTS.authorize, ...overrides.authorize }),
     token: createRateLimiter({ ...DEFAULTS.token, ...overrides.token }),
     revoke: createRateLimiter({ ...DEFAULTS.revoke, ...overrides.revoke }),
+    consent: createRateLimiter({ ...DEFAULTS.consent, ...overrides.consent }),
   }
 }
 

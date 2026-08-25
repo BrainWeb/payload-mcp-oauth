@@ -11,6 +11,7 @@ import { makePrmMetadataHandler } from './endpoints/metadata-prm.js'
 import { makeRegisterHandler } from './endpoints/register.js'
 import { makeRevokeHandler } from './endpoints/revoke.js'
 import { makeTokenHandler } from './endpoints/token.js'
+import { isOAuthAdmin } from './admin/is-admin.js'
 import { createRateLimitStore, rateLimitKey } from './middleware/rate-limit.js'
 import { wrapMcpEndpointHandler } from './middleware/wrap-mcp.js'
 import { OAUTH_AS_METADATA_PATH, OAUTH_PRM_METADATA_PATH } from './lib/paths.js'
@@ -101,7 +102,20 @@ function resolveConfig(options: PayloadMcpOAuthConfig): ResolvedConfig {
 function resolveAdminAccess(options: PayloadMcpOAuthConfig): Access {
   if (options.adminAccess) return options.adminAccess
   const userCollection = options.userCollection ?? 'users'
-  return ({ req }) => req.user?.collection === userCollection
+  // Collection membership ALONE is effectively `Boolean(req.user)` in the common
+  // single-`users`-collection app, which would let any logged-in end user rewrite
+  // a client's redirectUris (-> auth-code theft) or delete other users' tokens.
+  // `isOAuthAdmin` additionally honours a `role`/`isAdmin`/`roles` field when the
+  // user collection has one, and returns true when it has none — so the default
+  // Payload starters are unaffected while role-bearing apps get the tighter gate.
+  //
+  // If your operators carry a role OTHER than `admin`, this default will lock
+  // them out of the OAuth screens: pass your own `adminAccess` rule instead.
+  return ({ req }) => {
+    const user = req.user
+    if (!user || user.collection !== userCollection) return false
+    return isOAuthAdmin(user)
+  }
 }
 
 /**
@@ -245,7 +259,7 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
     {
       path: OAUTH_AS_METADATA_PATH,
       method: 'get',
-      handler: makeAsMetadataHandler(resolved.issuer),
+      handler: makeAsMetadataHandler(resolved.issuer, apiBase),
     },
     {
       path: OAUTH_PRM_METADATA_PATH,
@@ -266,12 +280,23 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
     {
       path: '/oauth/consent',
       method: 'post',
-      handler: makeConsentHandler(resolved.authCodeTtlSeconds, resolved.issuer, resolved.mcpPluginOptions),
+      handler: withRateLimit(
+        rateLimits.consent,
+        makeConsentHandler(resolved.authCodeTtlSeconds, resolved.issuer, resolved.mcpPluginOptions),
+      ),
     },
     {
       path: '/oauth/token',
       method: 'post',
-      handler: withCors(withRateLimit(rateLimits.token, makeTokenHandler(resolved.mcpPluginOptions))),
+      handler: withCors(
+        withRateLimit(
+          rateLimits.token,
+          makeTokenHandler(resolved.mcpPluginOptions, {
+            accessTtlSeconds: resolved.accessTokenTtlSeconds,
+            refreshTtlSeconds: resolved.refreshTokenTtlSeconds,
+          }),
+        ),
+      ),
     },
     { path: '/oauth/token', method: 'options', handler: corsPreflightHandler },
     {

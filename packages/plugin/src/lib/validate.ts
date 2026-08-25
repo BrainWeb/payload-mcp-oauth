@@ -1,4 +1,5 @@
 import type { Payload } from 'payload'
+import { isClientActive } from './clients.js'
 import { hashToken } from './token-storage.js'
 
 export interface TokenContext {
@@ -36,6 +37,11 @@ export async function validateAccessToken(
   if (!token) return null
   if (token['revokedAt']) return null
   if (new Date(token['expiresAt'] as string).getTime() + CLOCK_SKEW_MS < Date.now()) return null
+
+  // Deactivating a client in the admin UI must cut off its live credentials, not
+  // just block new authorization flows. Checked here so an operator revoking a
+  // connection takes effect on the very next MCP request.
+  if (!(await isClientActive(payload, token['clientId'] as string))) return null
 
   // Best-effort non-blocking lastUsedAt update — never let this delay the response
   payload

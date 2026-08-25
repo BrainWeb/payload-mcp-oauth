@@ -21,6 +21,24 @@ describe('buildAsMetadata', () => {
     expect(buildAsMetadata('https://example.com').code_challenge_methods_supported).toEqual(['S256'])
   })
 
+  it('honours a custom Payload API route', () => {
+    // Previously hardcoded to /api, so an app with a custom `routes.api`
+    // advertised endpoints that did not exist.
+    const m = buildAsMetadata('https://example.com', '/payload-api')
+    expect(m.authorization_endpoint).toBe('https://example.com/payload-api/oauth/authorize')
+    expect(m.token_endpoint).toBe('https://example.com/payload-api/oauth/token')
+    expect(m.registration_endpoint).toBe('https://example.com/payload-api/oauth/register')
+    expect(m.revocation_endpoint).toBe('https://example.com/payload-api/oauth/revoke')
+    // The issuer itself is not affected by the API route.
+    expect(m.issuer).toBe('https://example.com')
+  })
+
+  it('normalises an API route given without a leading slash', () => {
+    expect(buildAsMetadata('https://example.com', 'custom').token_endpoint).toBe(
+      'https://example.com/custom/oauth/token',
+    )
+  })
+
   it('declares only none for token_endpoint_auth_methods_supported', () => {
     expect(buildAsMetadata('https://example.com').token_endpoint_auth_methods_supported).toEqual(['none'])
   })

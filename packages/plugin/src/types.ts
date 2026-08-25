@@ -59,31 +59,61 @@ export interface PayloadMcpOAuthConfig {
    * denied (clients self-register via Dynamic Client Registration and tokens
    * are minted by the token endpoint).
    *
-   * The default authorises any authenticated user **belonging to the configured
-   * `userCollection`** (`req.user?.collection === userCollection`). For the
-   * standard Payload starters — where the `users` collection holds only
-   * operators/admins — this is correct and secure: the public/unauthenticated
-   * REST + GraphQL surface stays closed.
+   * The default authorises an authenticated user who **belongs to the configured
+   * `userCollection`** AND passes `isOAuthAdmin` — which honours a `role`,
+   * `isAdmin`, or `roles` field when the collection has one, and authorises any
+   * member when it has none. The standard Payload starters (no role field) are
+   * unaffected; apps that do carry roles get the tighter gate automatically.
+   *
+   * ⚠️ If your operators carry a role other than `admin`, this default will lock
+   * them out of the OAuth screens — supply your own rule below.
    *
    * ⚠️ If your `userCollection` mixes admins with untrusted end-users (e.g. a
    * single `users` collection for both staff and customers), supply your own
    * rule here — otherwise any logged-in user could rewrite a client's
    * `redirectUris` (→ auth-code theft) or revoke others' tokens.
    *
-   * @default ({ req }) => Boolean(req.user) && req.user.collection === userCollection
+   * @default ({ req }) => req.user?.collection === userCollection && isOAuthAdmin(req.user)
    */
   adminAccess?: Access
 
-  /** Lifetime of issued access tokens in seconds. @default 3600 */
+  /**
+   * Lifetime of issued access tokens in seconds.
+   *
+   * Until 0.3.7 this value was resolved but never passed to the token endpoint,
+   * so shortening it had no effect on issued credentials.
+   *
+   * @default 3600
+   */
   accessTokenTtlSeconds?: number
 
-  /** Lifetime of issued refresh tokens in seconds. @default 86400 */
+  /**
+   * Lifetime of issued refresh tokens in seconds.
+   *
+   * Applies to tokens minted by both the `authorization_code` and
+   * `refresh_token` grants. Until 0.3.7 this value was resolved but never
+   * passed to the token endpoint, so every deployment issued 30-day refresh
+   * tokens regardless of what was configured here.
+   *
+   * @default 86400
+   */
   refreshTokenTtlSeconds?: number
 
   /** Lifetime of issued auth codes in seconds. @default 300 */
   authCodeTtlSeconds?: number
 
-  /** Per-endpoint rate-limit overrides. */
+  /**
+   * Per-endpoint rate-limit overrides.
+   *
+   * ⚠️ Buckets are keyed on the first entry of the `x-forwarded-for` header.
+   * That header is client-supplied unless something upstream overwrites it, so
+   * these limits only hold when the app sits behind a proxy/load balancer that
+   * sets `x-forwarded-for` itself. Exposed directly to the internet, a caller
+   * can rotate the header to mint a fresh quota per request. The limits are a
+   * speed bump against casual abuse, never the only control — PKCE, the
+   * single-use CSRF nonce and the session gate are what actually protect the
+   * flow.
+   */
   rateLimits?: RateLimitOptions
 }
 
