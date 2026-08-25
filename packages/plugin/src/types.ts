@@ -80,7 +80,7 @@ export interface PayloadMcpOAuthConfig {
   /**
    * Lifetime of issued access tokens in seconds.
    *
-   * Until 0.3.7 this value was resolved but never passed to the token endpoint,
+   * Until 0.4.0 this value was resolved but never passed to the token endpoint,
    * so shortening it had no effect on issued credentials.
    *
    * @default 3600
@@ -91,7 +91,7 @@ export interface PayloadMcpOAuthConfig {
    * Lifetime of issued refresh tokens in seconds.
    *
    * Applies to tokens minted by both the `authorization_code` and
-   * `refresh_token` grants. Until 0.3.7 this value was resolved but never
+   * `refresh_token` grants. Until 0.4.0 this value was resolved but never
    * passed to the token endpoint, so every deployment issued 30-day refresh
    * tokens regardless of what was configured here.
    *
