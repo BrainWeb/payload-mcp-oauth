@@ -3,6 +3,7 @@ import type { MCPPluginConfig } from '@payloadcms/plugin-mcp'
 import { verifyCsrfToken, consumeCsrfNonce } from '../lib/csrf.js'
 import { issueAuthCode } from '../lib/auth-codes.js'
 import { scopeToCapabilities } from '../lib/scope.js'
+import { readRegisteredUris } from './authorize.js'
 import { oauthErrorResponse, redirectResponse, parseBody } from './helpers.js'
 
 export function makeConsentHandler(authCodeTtlSeconds = 300, issuer = '', mcpPluginOptions?: MCPPluginConfig): PayloadHandler {
@@ -90,7 +91,7 @@ export function makeConsentHandler(authCodeTtlSeconds = 300, issuer = '', mcpPlu
       if (!client) {
         return oauthErrorResponse(400, 'invalid_client', 'Unknown client_id')
       }
-      const registered = (client['redirectUris'] as Array<{ uri: string }>).map((r) => r.uri)
+      const registered = readRegisteredUris(client)
       if (!registered.includes(redirectUri)) {
         return oauthErrorResponse(400, 'invalid_redirect_uri', 'redirect_uri does not match registered URIs')
       }

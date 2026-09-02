@@ -315,7 +315,24 @@ because Skills are client-side it has no effect on the runtime connector agent.
 | `accessTokenTtlSeconds` | `number` | `3600` | Access-token lifetime. |
 | `refreshTokenTtlSeconds` | `number` | `86400` | Refresh-token lifetime. |
 | `authCodeTtlSeconds` | `number` | `300` | Authorization-code lifetime. |
-| `rateLimits` | `RateLimitOptions` | `{}` | Per-endpoint rate-limit overrides. |
+| `rateLimits` | `RateLimitOptions` | `{}` | Per-endpoint rate-limit overrides. Per-process and in-memory — see the caveat below. |
+
+### Rate limits
+
+The built-in limiters are a speed bump against casual abuse, not a security
+control — PKCE, the single-use CSRF nonce and the session gate are what protect
+the flow. Two caveats worth knowing before you rely on them:
+
+- **Buckets are keyed on `x-forwarded-for`,** which is client-supplied unless
+  something upstream overwrites it. Behind a proxy or load balancer that sets the
+  header itself, the limits hold; exposed directly to the internet, a caller can
+  rotate the header for a fresh quota per request.
+- **Buckets live in one process's memory.** Across several instances the
+  effective ceiling is your configured limit times the instance count, and on
+  serverless every cold start begins with empty buckets.
+
+If you need limits that actually bind, put them in front of the app — at your
+proxy, CDN or WAF.
 
 ### Admin UI & access
 

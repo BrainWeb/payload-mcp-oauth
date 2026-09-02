@@ -123,10 +123,16 @@ export interface PayloadMcpOAuthConfig {
    * That header is client-supplied unless something upstream overwrites it, so
    * these limits only hold when the app sits behind a proxy/load balancer that
    * sets `x-forwarded-for` itself. Exposed directly to the internet, a caller
-   * can rotate the header to mint a fresh quota per request. The limits are a
-   * speed bump against casual abuse, never the only control — PKCE, the
-   * single-use CSRF nonce and the session gate are what actually protect the
-   * flow.
+   * can rotate the header to mint a fresh quota per request.
+   *
+   * ⚠️ Buckets live in the memory of a single process. Across several instances
+   * — or on serverless, where each cold start begins empty — the effective limit
+   * is the configured one multiplied by however many processes are live, and on
+   * short-lived functions it may never bind at all.
+   *
+   * The limits are a speed bump against casual abuse, never the only control —
+   * PKCE, the single-use CSRF nonce and the session gate are what actually
+   * protect the flow.
    */
   rateLimits?: RateLimitOptions
 }

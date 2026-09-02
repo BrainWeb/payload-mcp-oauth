@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MCPPluginConfig } from '@payloadcms/plugin-mcp'
-import { makeAuthorizeHandler } from '../../../src/endpoints/authorize.js'
+import { makeAuthorizeHandler, readRegisteredUris } from '../../../src/endpoints/authorize.js'
 import { verifyCsrfToken } from '../../../src/lib/csrf.js'
 
 process.env['PMOAUTH_TOKEN_PEPPER'] = 'test-pepper-32-chars-minimum-length!!'
@@ -218,5 +218,41 @@ describe('makeAuthorizeHandler', () => {
     expect(res.status).toBe(200)
     const html = await res.text()
     expect(html).toMatch(/all tools enabled on this server/i)
+  })
+})
+
+describe('readRegisteredUris', () => {
+  it('reads the uri from each entry', () => {
+    expect(readRegisteredUris({ redirectUris: [{ uri: 'https://a/cb' }, { uri: 'https://b/cb' }] })).toEqual([
+      'https://a/cb',
+      'https://b/cb',
+    ])
+  })
+
+  it('returns nothing for a missing or non-array value, rather than throwing', () => {
+    // The value comes back from the database. A bare cast turned a malformed row
+    // into a TypeError — a 500 where the caller should see invalid_redirect_uri.
+    expect(readRegisteredUris({})).toEqual([])
+    expect(readRegisteredUris({ redirectUris: null })).toEqual([])
+    expect(readRegisteredUris({ redirectUris: 'https://a/cb' })).toEqual([])
+  })
+
+  it('skips malformed entries instead of failing the whole list', () => {
+    expect(
+      readRegisteredUris({ redirectUris: [{ uri: 'https://a/cb' }, null, {}, { uri: 42 }] }),
+    ).toEqual(['https://a/cb'])
+  })
+})
+
+describe('makeAuthorizeHandler — malformed client row', () => {
+  it('rejects with invalid_redirect_uri rather than a 500', async () => {
+    const req = makeReq(VALID_QUERY, { id: 'user-1' })
+    req.payload.find = vi.fn().mockResolvedValue({
+      docs: [{ ...VALID_CLIENT, redirectUris: null }],
+    })
+    const res = await makeAuthorizeHandler()(req as never)
+    // Fails closed: no registered URI matches, so nothing is redirected anywhere.
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as Record<string, unknown>)['error']).toBe('invalid_redirect_uri')
   })
 })

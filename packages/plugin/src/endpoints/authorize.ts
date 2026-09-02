@@ -82,6 +82,23 @@ h1{font-size:1.25rem;margin-bottom:0.5rem}
 </body></html>`
 }
 
+/**
+ * The registered redirect URIs of a client row.
+ *
+ * Reads defensively rather than casting: the value comes back from the database
+ * and the previous `as Array<{uri}>` cast turned a malformed or missing row into
+ * a TypeError, i.e. a 500 instead of the `invalid_redirect_uri` the caller
+ * should see. An unreadable list yields no URIs, so nothing matches and the
+ * request is rejected — failing closed.
+ */
+export function readRegisteredUris(client: Record<string, unknown>): string[] {
+  const raw = client['redirectUris']
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((entry) => (entry as { uri?: unknown } | null)?.uri)
+    .filter((uri): uri is string => typeof uri === 'string')
+}
+
 function errorRedirect(redirectUri: string | null, error: string, description: string, state?: string): Response {
   if (!redirectUri) {
     return oauthErrorResponse(400, error, description)
@@ -156,7 +173,7 @@ export function makeAuthorizeHandler(options: AuthorizeHandlerOptions = {}): Pay
       return errorRedirect(null, 'invalid_client', 'Unknown client_id', state)
     }
 
-    const registered = (client['redirectUris'] as Array<{ uri: string }>).map((r) => r.uri)
+    const registered = readRegisteredUris(client)
     if (!redirectUri || !registered.includes(redirectUri)) {
       return errorRedirect(null, 'invalid_redirect_uri', 'redirect_uri does not match registered URIs', state)
     }
