@@ -424,7 +424,8 @@ handler unchanged.
 | Symptom | Likely cause |
 |---|---|
 | `Error: payloadMcpOAuth must be registered AFTER mcpPlugin()` | Plugin order — put `payloadMcpOAuth()` after `mcpPlugin()`. |
-| OAuth tokens 401 but API keys work | `mcpPluginOptions` wasn't the **same** object reference (step 2). |
+| `Error: payloadMcpOAuth: mcpPluginOptions is not the same object you passed to mcpPlugin()` | Exactly what it says — you passed a spread or a fresh literal to one of them (step 2). Assign the options to a `const` and pass that same `const` to both. |
+| OAuth tokens 401 but API keys work | `mcpPluginOptions` wasn't the **same** object reference (step 2). Since 0.4.1 this is caught at boot with the error above instead of failing silently — if you see the 401 without that error, check `PMOAUTH_TOKEN_PEPPER` matches the one the tokens were issued under. |
 | `/.well-known/...` returns the app's HTML / 404 | `proxy.ts` / `middleware.ts` missing or its `matcher` doesn't include the well-known paths (step 3). |
 | **Every** route 500s; log says *"can't recognize the exported `config` field … it mustn't be reexported"* | `config` was re-exported from `…/middleware` instead of declared as a local literal in your `proxy.ts` / `middleware.ts` (step 3). |
 | `The "middleware" file convention is deprecated` warning (Next 16) | Rename `src/middleware.ts` → `src/proxy.ts` and export the handler as `proxy` (step 3). |

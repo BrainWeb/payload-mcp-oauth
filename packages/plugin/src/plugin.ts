@@ -1,4 +1,5 @@
 import type { Access, CollectionConfig, Config, Endpoint, PayloadRequest } from 'payload'
+import type { MCPPluginConfig } from '@payloadcms/plugin-mcp'
 import type { PayloadMcpOAuthConfig, ResolvedConfig } from './types.js'
 import { oauthAuthCodesCollection } from './collections/auth-codes.js'
 import { oauthClientsCollection } from './collections/clients.js'
@@ -184,6 +185,58 @@ function isMcpEndpoint(endpoint: Endpoint): boolean {
   return endpoint.path === '/mcp' || endpoint.path === '/api/mcp'
 }
 
+/** The slug `@payloadcms/plugin-mcp` registers itself under via `definePlugin`. */
+const MCP_PLUGIN_SLUG = '@payloadcms/plugin-mcp'
+
+/**
+ * Catches the single most damaging setup mistake: passing a COPY of the MCP
+ * options to one plugin and the original to the other.
+ *
+ * `installOverrideAuth` mutates the object it is given, and the MCP handler only
+ * sees that mutation if it is the same object the consumer passed to
+ * `mcpPlugin()`. Payload's `definePlugin` spreads the options into a fresh
+ * object when it runs the plugin (`{...options, config, plugins}`), and
+ * `plugin-mcp` spreads again, so the handler captures a copy taken at
+ * plugin-run time — a mutation applied to any other object, or to the right one
+ * too late, is invisible. The symptom is OAuth tokens silently 401ing while API
+ * keys keep working, which looks like a token bug and is not.
+ *
+ * `definePlugin` keeps the consumer's ORIGINAL options object on the plugin
+ * function as `.options`, and the plugin functions are still on the config when
+ * we run, so we can compare identity and say exactly what went wrong.
+ *
+ * Stays silent unless it positively identifies a mismatch: an older
+ * `plugin-mcp` without a slug, or a config whose `plugins` array has been
+ * dropped, gives no evidence either way, and guessing would break working
+ * setups.
+ */
+function assertSharedMcpOptions(config: Config, mcpPluginOptions: MCPPluginConfig): void {
+  const plugins = config.plugins
+  if (!Array.isArray(plugins)) return
+
+  const mcp = plugins.find(
+    (p): p is typeof p & { options?: unknown } =>
+      typeof p === 'function' && (p as { slug?: string }).slug === MCP_PLUGIN_SLUG,
+  )
+  if (!mcp || !('options' in mcp) || typeof mcp.options !== 'object' || mcp.options === null) return
+
+  if (mcp.options === mcpPluginOptions) return
+
+  throw new PayloadMcpOAuthError(
+    'MCP_OPTIONS_NOT_SHARED',
+    'payloadMcpOAuth: `mcpPluginOptions` is not the same object you passed to mcpPlugin(). ' +
+      'The OAuth token validator is installed on the object you give us, and the MCP handler ' +
+      'only reads the one it was given — so OAuth tokens would fail with 401 while API keys ' +
+      'kept working. Assign the options to a const and pass that SAME const to both:\n\n' +
+      '  const mcpOptions: MCPPluginConfig = { collections: { ... } }\n' +
+      '  plugins: [\n' +
+      '    mcpPlugin(mcpOptions),\n' +
+      '    payloadMcpOAuth({ issuer, mcpPluginOptions: mcpOptions }),\n' +
+      '  ]\n\n' +
+      'A spread or a fresh object literal in either place will not work.',
+  )
+}
+
 function assertMcpPluginRanFirst(config: Config): void {
   if ((config.endpoints ?? []).some(isMcpEndpoint)) return
   throw new PayloadMcpOAuthError(
@@ -238,6 +291,7 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
 
   const resolved = resolveConfig(options)
   assertMcpPluginRanFirst(incomingConfig)
+  assertSharedMcpOptions(incomingConfig, resolved.mcpPluginOptions)
   warnIfVersionUntested()
 
   // T5.4: wrap MCP endpoint handlers to convert OAuthInvalidTokenError → 401

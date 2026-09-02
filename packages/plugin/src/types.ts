@@ -27,8 +27,9 @@ export interface PayloadMcpOAuthConfig {
    * ```
    *
    * If you pass a different object, `overrideAuth` is installed on an object the
-   * MCP handler never sees, and OAuth tokens silently fail to authenticate while
-   * the API-key path keeps working.
+   * MCP handler never sees. Since 0.4.1 that is detected at boot and throws
+   * `MCP_OPTIONS_NOT_SHARED` — previously it failed silently at runtime, with
+   * OAuth tokens 401ing while the API-key path kept working.
    */
   mcpPluginOptions: MCPPluginConfig
 

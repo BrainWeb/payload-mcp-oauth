@@ -515,3 +515,72 @@ describe('buildPlugin — discovery advertises the operator scopes', () => {
     expect(m).not.toHaveProperty('scopes_supported')
   })
 })
+
+describe('buildPlugin — detects a copied mcpPluginOptions (#51)', () => {
+  /** Mimics what Payload's definePlugin produces: the ORIGINAL options on `.options`. */
+  function fakeMcpPlugin(options: unknown) {
+    const fn = ((config: unknown) => config) as ((c: unknown) => unknown) & {
+      slug?: string
+      options?: unknown
+      order?: number
+    }
+    fn.slug = '@payloadcms/plugin-mcp'
+    fn.options = options
+    fn.order = 10
+    return fn
+  }
+
+  function configWithMcpPlugin(pluginOptions: unknown) {
+    return {
+      ...makeConfig(),
+      plugins: [fakeMcpPlugin(pluginOptions)],
+    } as unknown as import('payload').Config
+  }
+
+  it('accepts the same object reference', () => {
+    const shared = { collections: { posts: { enabled: true } } }
+    expect(() =>
+      buildPlugin(configWithMcpPlugin(shared), makeOptions({ mcpPluginOptions: shared as never })),
+    ).not.toThrow()
+  })
+
+  it('throws when given a spread copy instead of the shared reference', () => {
+    // The mistake this exists to catch: `overrideAuth` gets installed on an
+    // object the MCP handler never reads, so OAuth tokens 401 while API keys
+    // keep working — a symptom that looks like a token bug and is not.
+    const shared = { collections: { posts: { enabled: true } } }
+    expect(() =>
+      buildPlugin(configWithMcpPlugin(shared), makeOptions({ mcpPluginOptions: { ...shared } as never })),
+    ).toThrow(/same object you passed to mcpPlugin/)
+  })
+
+  it('reports the error with a MCP_OPTIONS_NOT_SHARED code', () => {
+    const shared = { collections: {} }
+    try {
+      buildPlugin(configWithMcpPlugin(shared), makeOptions({ mcpPluginOptions: {} as never }))
+      throw new Error('expected a throw')
+    } catch (err) {
+      expect(err).toBeInstanceOf(PayloadMcpOAuthError)
+      expect((err as PayloadMcpOAuthError).code).toBe('MCP_OPTIONS_NOT_SHARED')
+    }
+  })
+
+  it('stays silent when the config carries no plugins array', () => {
+    // No evidence either way — guessing would break working setups.
+    expect(() => buildPlugin(makeConfig(), makeOptions())).not.toThrow()
+  })
+
+  it('stays silent when the MCP plugin has no slug (older plugin-mcp)', () => {
+    const unslugged = ((config: unknown) => config) as ((c: unknown) => unknown) & { options?: unknown }
+    unslugged.options = { collections: {} }
+    const config = { ...makeConfig(), plugins: [unslugged] } as unknown as import('payload').Config
+    expect(() => buildPlugin(config, makeOptions())).not.toThrow()
+  })
+
+  it('stays silent when the MCP plugin exposes no options', () => {
+    const noOptions = ((config: unknown) => config) as ((c: unknown) => unknown) & { slug?: string }
+    noOptions.slug = '@payloadcms/plugin-mcp'
+    const config = { ...makeConfig(), plugins: [noOptions] } as unknown as import('payload').Config
+    expect(() => buildPlugin(config, makeOptions())).not.toThrow()
+  })
+})
