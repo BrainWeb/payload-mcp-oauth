@@ -222,3 +222,35 @@ describe('makeConsentHandler', () => {
     expect(req.payload.create).toHaveBeenCalled()
   })
 })
+
+describe('makeConsentHandler — RFC 9207 iss on the deny response', () => {
+  const ISSUER = 'https://cms.example.com'
+
+  it('includes iss when the user denies', async () => {
+    // The success redirect has always carried iss; the deny redirect is just as
+    // much an authorization response (RFC 9207 §2 covers error responses too).
+    // A client honouring our advertised support must otherwise reject it (§2.4),
+    // turning "the user pressed Deny" into a protocol violation.
+    const res = await makeConsentHandler(300, ISSUER)(
+      makeReq({ ...VALID_BODY, decision: 'deny' }) as never,
+    )
+    const url = new URL(res.headers.get('Location') ?? '')
+    expect(url.searchParams.get('error')).toBe('access_denied')
+    expect(url.searchParams.get('iss')).toBe(ISSUER)
+    expect(url.searchParams.get('state')).toBe('csrf-state')
+  })
+
+  it('matches the iss the approve redirect sends', async () => {
+    const approved = await makeConsentHandler(300, ISSUER)(makeReq(VALID_BODY) as never)
+    const denied = await makeConsentHandler(300, ISSUER)(
+      makeReq({ ...VALID_BODY, decision: 'deny' }) as never,
+    )
+    const issOf = (r: Response) => new URL(r.headers.get('Location') ?? '').searchParams.get('iss')
+    expect(issOf(denied)).toBe(issOf(approved))
+  })
+
+  it('omits iss entirely when no issuer is configured', async () => {
+    const res = await makeConsentHandler()(makeReq({ ...VALID_BODY, decision: 'deny' }) as never)
+    expect(new URL(res.headers.get('Location') ?? '').searchParams.has('iss')).toBe(false)
+  })
+})

@@ -90,7 +90,12 @@ describe('makeTokenHandler — authorization_code grant', () => {
     expect(data['capabilities']).toEqual({ posts: { find: true } })
   })
 
-  it('stores empty capabilities (full-grant fallback) when scope is absent', async () => {
+  it('stores the full operator grant when scope is absent (#75)', async () => {
+    // Regression test for #75. Claude.ai's Custom Connector completes the flow
+    // with no scope, so this is the NORMAL path, not an edge case. Versions up
+    // to 0.4.0 persisted `capabilities: {}` here — a record that reads as "no
+    // permissions" for anything inspecting the row, while requests succeeded
+    // with full access through a fallback in overrideAuth.
     const authCode = 'pmoauth_ac_' + crypto.randomBytes(32).toString('base64url')
     const req = makeReq(
       { grant_type: 'authorization_code', code: authCode, client_id: 'client-1', redirect_uri: 'https://example.com/cb', code_verifier: VERIFIER },
@@ -101,15 +106,63 @@ describe('makeTokenHandler — authorization_code grant', () => {
       (c: [{ collection: string }]) => c[0].collection === 'oauth-tokens',
     )
     const data = (createCall as [{ data: Record<string, unknown> }])[0].data
-    // Empty scope → capabilities={} so wrap-mcp uses buildFullCapabilities fallback
+    expect(data['capabilities']).toEqual({
+      posts: { find: true, create: true, update: true, delete: true },
+    })
+  })
+
+  it('records the full grant on BOTH the access and the refresh token', async () => {
+    const authCode = 'pmoauth_ac_' + crypto.randomBytes(32).toString('base64url')
+    const req = makeReq(
+      { grant_type: 'authorization_code', code: authCode, client_id: 'client-1', redirect_uri: 'https://example.com/cb', code_verifier: VERIFIER },
+      [makeCodeDoc({ scope: '' })],
+    )
+    await makeTokenHandler(MCP_OPTIONS)(req as never)
+    const tokenRows = req.payload.create.mock.calls
+      .filter((c: [{ collection: string }]) => c[0].collection === 'oauth-tokens')
+      .map((c: [{ data: Record<string, unknown> }]) => c[0].data)
+    expect(tokenRows).toHaveLength(2)
+    for (const row of tokenRows) {
+      expect(row['capabilities']).not.toEqual({})
+    }
+  })
+
+  it('stores exactly the requested capabilities when a scope IS supplied', async () => {
+    // The narrowed grant must not be widened to the full set by the #75 fix.
+    const authCode = 'pmoauth_ac_' + crypto.randomBytes(32).toString('base64url')
+    const req = makeReq(
+      { grant_type: 'authorization_code', code: authCode, client_id: 'client-1', redirect_uri: 'https://example.com/cb', code_verifier: VERIFIER },
+      [makeCodeDoc({ scope: 'posts:read' })],
+    )
+    await makeTokenHandler(MCP_OPTIONS)(req as never)
+    const createCall = req.payload.create.mock.calls.find(
+      (c: [{ collection: string }]) => c[0].collection === 'oauth-tokens',
+    )
+    const data = (createCall as [{ data: Record<string, unknown> }])[0].data
+    expect(data['capabilities']).toEqual({ posts: { find: true } })
+  })
+
+  it('stores no capabilities when the handler is built without mcpPluginOptions', async () => {
+    // Direct construction with no MCP options has nothing to resolve a grant
+    // from; the row stays empty and overrideAuth's legacy path handles it.
+    const authCode = 'pmoauth_ac_' + crypto.randomBytes(32).toString('base64url')
+    const req = makeReq(
+      { grant_type: 'authorization_code', code: authCode, client_id: 'client-1', redirect_uri: 'https://example.com/cb', code_verifier: VERIFIER },
+      [makeCodeDoc({ scope: '' })],
+    )
+    await makeTokenHandler()(req as never)
+    const createCall = req.payload.create.mock.calls.find(
+      (c: [{ collection: string }]) => c[0].collection === 'oauth-tokens',
+    )
+    const data = (createCall as [{ data: Record<string, unknown> }])[0].data
     expect(data['capabilities']).toEqual({})
   })
 
   it('rejects with invalid_scope when the code scope is no longer grantable (no full-grant escalation)', async () => {
     // Scope was valid at /authorize but the collection is now disabled (here
-    // 'secrets' is absent from MCP_OPTIONS). scopeToCapabilities → valid:false,
-    // capabilities:{}. Storing {} would let wrap-mcp widen it to FULL caps, so
-    // the exchange must be rejected rather than issue an (escalated) token.
+    // 'secrets' is absent from MCP_OPTIONS), so scopeToCapabilities returns
+    // kind:'invalid'. The exchange must be rejected outright rather than issue
+    // a token whose stored grant says nothing about what it may do.
     const authCode = 'pmoauth_ac_' + crypto.randomBytes(32).toString('base64url')
     const req = makeReq(
       { grant_type: 'authorization_code', code: authCode, client_id: 'client-1', redirect_uri: 'https://example.com/cb', code_verifier: VERIFIER },

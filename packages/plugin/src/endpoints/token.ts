@@ -3,7 +3,7 @@ import type { MCPPluginConfig } from '@payloadcms/plugin-mcp'
 import { consumeAuthCode } from '../lib/auth-codes.js'
 import { validateCodeVerifier } from '../lib/pkce.js'
 import { issueTokenPair, rotateRefreshToken } from '../lib/tokens.js'
-import { scopeToCapabilities } from '../lib/scope.js'
+import { buildFullCapabilities, scopeToCapabilities } from '../lib/scope.js'
 import { oauthErrorResponse, jsonResponse, parseBody } from './helpers.js'
 
 /**
@@ -72,24 +72,37 @@ async function handleAuthCode(
     return oauthErrorResponse(400, 'invalid_grant', 'Authorization code is invalid, expired, or already used')
   }
 
-  // Resolve the granted capabilities from the requested scope. The `valid` flag
-  // MUST be honoured: scopeToCapabilities returns capabilities:{} for BOTH an
-  // empty scope (intentional full grant, applied by the wrap-mcp fallback) AND
-  // an invalid scope (grant nothing). Storing {} for the invalid case would let
-  // wrap-mcp widen it back to FULL capabilities — a privilege escalation that
-  // defeats narrowing (e.g. the operator disabled a collection after the auth
-  // code was issued). So an invalid scope is rejected here, never issued.
+  // Resolve the granted capabilities from the requested scope and persist them
+  // as an explicit record of what was granted.
+  //
+  // A client that requests no scope (Claude.ai's Custom Connector is the common
+  // case) gets RFC 6749 §3.3's "pre-defined default" — the full operator grant —
+  // written out in full. Storing `{}` there, as versions up to 0.4.0 did, left
+  // every such token claiming zero capabilities in the database while requests
+  // succeeded with full access via a fallback in `overrideAuth`; the two paths
+  // disagreed and only the fallback was right.
+  //
+  // This snapshot is a RECORD of what the grant meant at consent time, for
+  // audit — it is not what authorises the token. A full grant is a standing
+  // instruction ("everything the operator has enabled"), so `overrideAuth`
+  // re-resolves it live on every request; using this snapshot as a ceiling
+  // instead would mean a newly enabled collection never reached an existing
+  // connection. The empty `scope` on the row is what marks it as a full grant.
+  //
+  // An invalid scope is rejected outright rather than stored — e.g. the operator
+  // disabled a collection between authorization and redemption.
   let capabilities: Record<string, unknown> = {}
   if (mcpPluginOptions) {
     const scopeResult = scopeToCapabilities(ctx.scope ?? '', mcpPluginOptions)
-    if (!scopeResult.valid) {
+    if (scopeResult.kind === 'invalid') {
       return oauthErrorResponse(
         400,
         'invalid_scope',
         `Requested scope can no longer be granted: ${scopeResult.invalidScopes.join(' ')}`,
       )
     }
-    capabilities = scopeResult.capabilities
+    capabilities =
+      scopeResult.kind === 'full' ? buildFullCapabilities(mcpPluginOptions) : scopeResult.capabilities
   }
 
   const pair = await issueTokenPair(req.payload, {

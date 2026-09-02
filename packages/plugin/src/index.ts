@@ -3,6 +3,26 @@ import type { PayloadMcpOAuthConfig } from './types.js'
 import { buildPlugin, isPluginDisabled } from './plugin.js'
 import { installOverrideAuth } from './middleware/wrap-mcp.js'
 
+/**
+ * The slug this plugin registers under for cross-plugin discovery, mirroring
+ * `@payloadcms/plugin-mcp`'s own. We rely on that affordance to detect a copied
+ * `mcpPluginOptions` at boot, so it would be inconsistent not to offer it.
+ */
+export const PLUGIN_SLUG = 'plugin-mcp-oauth'
+
+/**
+ * Typed cross-plugin discovery: a plugin authored with `definePlugin` receives a
+ * slug-keyed `plugins` map, and this augmentation makes our entry come back as
+ * `{ options: PayloadMcpOAuthConfig }` rather than an untyped `Plugin`.
+ */
+declare module 'payload' {
+  // Must be an `interface` (not a type alias) — module augmentation only merges
+  // into interfaces.
+  interface RegisteredPlugins {
+    'plugin-mcp-oauth': PayloadMcpOAuthConfig
+  }
+}
+
 export type { PayloadMcpOAuthConfig, ResolvedConfig } from './types.js'
 export { PayloadMcpOAuthError, OAuthInvalidTokenError } from './types.js'
 export type { AsMetadata } from './endpoints/metadata-as.js'
@@ -40,8 +60,19 @@ export function payloadMcpOAuth(options: PayloadMcpOAuthConfig): Plugin {
     installOverrideAuth(options.mcpPluginOptions, options.userCollection ?? 'users')
   }
 
+  // `slug`, `order` and `options` are set by hand rather than via Payload's
+  // `definePlugin`. That helper only exists from payload 3.83.0, and our peer
+  // range is ^3.0.0 — importing it would break every consumer below that with a
+  // module-load error (`does not provide an export named 'definePlugin'` on ESM,
+  // `definePlugin is not a function` on CJS). It is also still marked
+  // @experimental upstream. Setting the three properties directly produces the
+  // same plugin function with no version floor, and keeps `options` as the exact
+  // object the caller passed rather than definePlugin's spread copy.
+  //
+  // mcpPlugin runs at order 10; ours is 20, so we run after it.
   const fn: Plugin = (incomingConfig) => buildPlugin(incomingConfig, options)
-  // mcpPlugin uses definePlugin with order:10; we must run after it
+  fn.slug = PLUGIN_SLUG
   fn.order = 20
+  fn.options = options as unknown as Record<string, unknown>
   return fn
 }

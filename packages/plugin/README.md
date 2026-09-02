@@ -176,6 +176,16 @@ In development a built-in insecure pepper is used if `PMOAUTH_TOKEN_PEPPER` is
 unset (with a warning). In `NODE_ENV=production` the plugin **throws on boot** if
 it is missing or shorter than 32 characters.
 
+> **Set `PMOAUTH_TOKEN_PEPPER` locally too.** `next build` and `next start` set
+> `NODE_ENV=production` whether or not you are deploying, so a local production
+> build hits the same boot check. Put the pepper in your local `.env` and
+> `pnpm build` works on your machine.
+>
+> A `http://localhost` (or `127.0.0.1` / `[::1]`) issuer is *exempt* from the
+> HTTPS requirement for exactly this reason — a loopback URL is not reachable off
+> your machine, so there is no transport to protect. Any other host still has to
+> be `https://` under `NODE_ENV=production`.
+
 > **Keep `serverURL` consistent.** The authorize/consent flow signs the user in
 > with a first-party Payload **session cookie**, so Payload's `serverURL` must be
 > the same public origin clients reach (the same value as `NEXT_PUBLIC_SERVER_URL`).
@@ -300,11 +310,67 @@ because Skills are client-side it has no effect on the runtime connector agent.
 | `mcpPluginOptions` | `MCPPluginConfig` | — (required) | The **same** object passed to `mcpPlugin()`. |
 | `userCollection` | `string` | `'users'` | Collection holding user accounts. |
 | `disabled` | `boolean` | `false` | Turn OAuth off without uninstalling: no endpoints, no token wiring, `mcpPluginOptions` untouched (API-key MCP keeps working). Collections stay registered for schema consistency. Also auto-detected when `mcpPluginOptions.disabled` is set. |
-| `adminAccess` | `Access` | authenticated user in `userCollection` | Who may view/manage the OAuth collections in the admin. See below. |
+| `adminAccess` | `Access` | member of `userCollection` who passes the role check | Who may view/manage the OAuth collections in the admin. Honours a `role`/`isAdmin`/`roles` field when your collection has one. See below. |
+| `loginPath` | `string` | `routes.admin` + `admin.routes.login` | Where to send an unauthenticated user to sign in. Derived from your Payload config, so a custom admin or login route is picked up automatically. Set it only if sign-in lives outside the admin panel. |
 | `accessTokenTtlSeconds` | `number` | `3600` | Access-token lifetime. |
 | `refreshTokenTtlSeconds` | `number` | `86400` | Refresh-token lifetime. |
 | `authCodeTtlSeconds` | `number` | `300` | Authorization-code lifetime. |
-| `rateLimits` | `RateLimitOptions` | `{}` | Per-endpoint rate-limit overrides. |
+| `rateLimits` | `RateLimitOptions` | `{}` | Per-endpoint rate-limit overrides. Per-process and in-memory — see the caveat below. |
+
+### Scopes
+
+A client may request a narrowed grant with a space-separated `scope`, where each
+token is `<collection-or-global-slug>:<operation>`:
+
+| Scope token | Grants (collections) | Grants (globals) |
+|---|---|---|
+| `<slug>:read` | `find` | `find` |
+| `<slug>:write` | `create` + `update` | `update` |
+| `<slug>:delete` | `delete` | — (rejected) |
+
+```
+scope=posts:read posts:write media:read
+```
+
+**Requesting no scope grants everything the operator has enabled** — RFC 6749
+§3.3's pre-defined default, and what Claude.ai's Custom Connector does. The
+consent screen says which of the two is happening.
+
+Scope can only ever *narrow*:
+
+- Every operation a token names must be enabled on the server, or the whole
+  request is rejected with `invalid_scope` — there are no partial grants. A
+  collection with only `find` enabled offers `:read` and refuses `:write`.
+- The scope is validated at `/authorize`, re-validated at `/consent` (so
+  tampering with the hidden form field is caught), and resolved again when the
+  code is redeemed.
+- Grants are resolved against your **live** config on every request, not frozen
+  at consent. A **scoped** grant names a fixed set, so it can only shrink —
+  disabling an operation removes it from existing tokens on their next call. A
+  **no-scope** grant means "whatever is enabled now", so it tracks the config in
+  both directions: enable a new collection and an already-connected client picks
+  it up, with no re-authorisation.
+
+The exact set your server accepts is published in
+`/.well-known/oauth-authorization-server` as `scopes_supported`, derived from
+your `mcpPluginOptions` — so you never have to maintain the list by hand.
+
+### Rate limits
+
+The built-in limiters are a speed bump against casual abuse, not a security
+control — PKCE, the single-use CSRF nonce and the session gate are what protect
+the flow. Two caveats worth knowing before you rely on them:
+
+- **Buckets are keyed on `x-forwarded-for`,** which is client-supplied unless
+  something upstream overwrites it. Behind a proxy or load balancer that sets the
+  header itself, the limits hold; exposed directly to the internet, a caller can
+  rotate the header for a fresh quota per request.
+- **Buckets live in one process's memory.** Across several instances the
+  effective ceiling is your configured limit times the instance count, and on
+  serverless every cold start begins with empty buckets.
+
+If you need limits that actually bind, put them in front of the app — at your
+proxy, CDN or WAF.
 
 ### Admin UI & access
 
@@ -314,10 +380,27 @@ group (alongside the MCP plugin's API Keys). `read`/`update`/`delete` are gated 
 minted by the token endpoint). `oauth-auth-codes` and `oauth-csrf-nonces` stay
 hidden and fully locked.
 
-The default `adminAccess` authorises any authenticated user **in your
-`userCollection`** and denies the public REST/GraphQL surface — correct for the
-standard starters, where `users` holds only operators. **If your `userCollection`
-mixes admins with untrusted end-users, pass your own rule:**
+The default `adminAccess` denies the public REST/GraphQL surface and authorises an
+authenticated user who is **in your `userCollection`** *and* passes an admin
+check that honours whichever role field your collection has:
+
+| Your user collection has | Default rule authorises |
+|---|---|
+| a `role` field | `role === 'admin'` |
+| an `isAdmin` field | `isAdmin === true` |
+| a `roles` array | `roles` includes `'admin'` |
+| none of the above | any member of the collection |
+
+So the standard Payload starters (no role field) are unaffected, while apps that
+already carry roles get the tighter gate automatically.
+
+⚠️ **If your operators carry a role other than `admin`** — `editor`, `owner`,
+`staff` — this default locks them out of the OAuth screens. Pass your own rule.
+
+⚠️ **If your `userCollection` mixes admins with untrusted end-users** and has no
+role field, the default reduces to "any logged-in user", who could then rewrite a
+client's `redirectUris` (→ auth-code theft) or revoke others' tokens. Pass your
+own rule:
 
 ```ts
 payloadMcpOAuth({
@@ -344,7 +427,8 @@ handler unchanged.
 | Symptom | Likely cause |
 |---|---|
 | `Error: payloadMcpOAuth must be registered AFTER mcpPlugin()` | Plugin order — put `payloadMcpOAuth()` after `mcpPlugin()`. |
-| OAuth tokens 401 but API keys work | `mcpPluginOptions` wasn't the **same** object reference (step 2). |
+| `Error: payloadMcpOAuth: mcpPluginOptions is not the same object you passed to mcpPlugin()` | Exactly what it says — you passed a spread or a fresh literal to one of them (step 2). Assign the options to a `const` and pass that same `const` to both. |
+| OAuth tokens 401 but API keys work | `mcpPluginOptions` wasn't the **same** object reference (step 2). Since 0.5.0 this is caught at boot with the error above instead of failing silently — if you see the 401 without that error, check `PMOAUTH_TOKEN_PEPPER` matches the one the tokens were issued under. |
 | `/.well-known/...` returns the app's HTML / 404 | `proxy.ts` / `middleware.ts` missing or its `matcher` doesn't include the well-known paths (step 3). |
 | **Every** route 500s; log says *"can't recognize the exported `config` field … it mustn't be reexported"* | `config` was re-exported from `…/middleware` instead of declared as a local literal in your `proxy.ts` / `middleware.ts` (step 3). |
 | `The "middleware" file convention is deprecated` warning (Next 16) | Rename `src/middleware.ts` → `src/proxy.ts` and export the handler as `proxy` (step 3). |

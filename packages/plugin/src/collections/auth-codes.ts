@@ -5,45 +5,29 @@ import type { Access, CollectionAfterChangeHook, CollectionConfig } from 'payloa
 // rationale (previously any authenticated user could read/tamper these rows).
 const denyPublicAccess: Access = () => false
 
+// A single bulk delete rather than two finds plus N individual deletes, matching
+// the sweep in csrf-nonces.ts — the two collections hold the same kind of
+// short-lived single-use row and had opposite implementations, with the nonce
+// sweep's own comment explaining why find + N deletes is the wrong shape (write
+// amplification and lock contention on every insert).
 const sweepExpiredCodes: CollectionAfterChangeHook = async ({ operation, req }) => {
   if (operation !== 'create') return
 
-  const now = new Date().toISOString()
-
-  const expired = await req.payload.find({
-    collection: 'oauth-auth-codes',
-    overrideAccess: true,
-    where: { expiresAt: { less_than: now } },
-    limit: 200,
-    pagination: false,
-    req,
-  })
-
-  const consumed = await req.payload.find({
-    collection: 'oauth-auth-codes',
-    overrideAccess: true,
-    where: { consumedAt: { exists: true } },
-    limit: 200,
-    pagination: false,
-    req,
-  })
-
-  const toDelete = [
-    ...new Set([
-      ...expired.docs.map((d) => d.id),
-      ...consumed.docs.map((d) => d.id),
-    ]),
-  ]
-
-  await Promise.all(
-    toDelete.map((id) =>
-      req.payload
-        .delete({ collection: 'oauth-auth-codes', overrideAccess: true, id, req })
-        .catch((err) => {
-          req.payload.logger?.warn(`[pmoauth] sweepExpiredCodes: failed to delete id=${id}: ${String(err)}`)
-        }),
-    ),
-  )
+  try {
+    await req.payload.delete({
+      collection: 'oauth-auth-codes',
+      overrideAccess: true,
+      where: {
+        or: [
+          { expiresAt: { less_than: new Date().toISOString() } },
+          { consumedAt: { exists: true } },
+        ],
+      },
+      req,
+    })
+  } catch {
+    // Best-effort housekeeping; never block auth-code issuance on it.
+  }
 }
 
 export const oauthAuthCodesCollection: CollectionConfig = {

@@ -82,7 +82,37 @@ h1{font-size:1.25rem;margin-bottom:0.5rem}
 </body></html>`
 }
 
-function errorRedirect(redirectUri: string | null, error: string, description: string, state?: string): Response {
+/**
+ * The registered redirect URIs of a client row.
+ *
+ * Reads defensively rather than casting: the value comes back from the database
+ * and the previous `as Array<{uri}>` cast turned a malformed or missing row into
+ * a TypeError, i.e. a 500 instead of the `invalid_redirect_uri` the caller
+ * should see. An unreadable list yields no URIs, so nothing matches and the
+ * request is rejected — failing closed.
+ */
+export function readRegisteredUris(client: Record<string, unknown>): string[] {
+  const raw = client['redirectUris']
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((entry) => (entry as { uri?: unknown } | null)?.uri)
+    .filter((uri): uri is string => typeof uri === 'string')
+}
+
+/**
+ * @param issuer Included as `iss` per RFC 9207 §2, which requires it on ALL
+ *   authorization responses — error responses included. The AS metadata
+ *   advertises `authorization_response_iss_parameter_supported`, and §2.4 says a
+ *   client MUST then reject a response without it: omitting `iss` here would
+ *   turn an ordinary `invalid_scope` into a protocol violation at the client.
+ */
+function errorRedirect(
+  redirectUri: string | null,
+  error: string,
+  description: string,
+  state?: string,
+  issuer?: string,
+): Response {
   if (!redirectUri) {
     return oauthErrorResponse(400, error, description)
   }
@@ -90,15 +120,45 @@ function errorRedirect(redirectUri: string | null, error: string, description: s
   url.searchParams.set('error', error)
   url.searchParams.set('error_description', description)
   if (state) url.searchParams.set('state', state)
+  if (issuer) url.searchParams.set('iss', issuer)
   return redirectResponse(url.toString())
 }
 
-export function makeAuthorizeHandler(
-  adminPath = '/admin',
-  loginPath?: string,
-  consentPath = '/api/oauth/consent',
-  mcpPluginOptions?: MCPPluginConfig,
-): PayloadHandler {
+export interface AuthorizeHandlerOptions {
+  /**
+   * Where to send an unauthenticated user to sign in, as an app-absolute path.
+   * Built by the caller from `routes.admin` + `admin.routes.login`, both of
+   * which an app may customise.
+   * @default '/admin/login'
+   */
+  loginPath?: string
+  /** Where the consent form POSTs. @default '/api/oauth/consent' */
+  consentPath?: string
+  /**
+   * This endpoint's own path, used to rebuild the post-login return URL when
+   * `req.url` cannot be parsed. @default '/api/oauth/authorize'
+   */
+  authorizePath?: string
+  /** Enables scope validation and the narrowed-grant consent copy. */
+  mcpPluginOptions?: MCPPluginConfig
+  /** The OAuth issuer, echoed as `iss` on error redirects (RFC 9207 §2). */
+  issuer?: string
+}
+
+/**
+ * Named options rather than positional arguments on purpose: the previous
+ * signature led the caller to pass `('/admin', undefined, ...)`, which reads as
+ * a deliberate choice but silently ignored an app's configured admin route.
+ */
+export function makeAuthorizeHandler(options: AuthorizeHandlerOptions = {}): PayloadHandler {
+  const {
+    loginPath = '/admin/login',
+    consentPath = '/api/oauth/consent',
+    authorizePath = '/api/oauth/authorize',
+    mcpPluginOptions,
+    issuer,
+  } = options
+
   return async (req) => {
     const q = req.query as Record<string, string | undefined>
     const responseType = q['response_type']
@@ -130,45 +190,44 @@ export function makeAuthorizeHandler(
       return errorRedirect(null, 'invalid_client', 'Unknown client_id', state)
     }
 
-    const registered = (client['redirectUris'] as Array<{ uri: string }>).map((r) => r.uri)
+    const registered = readRegisteredUris(client)
     if (!redirectUri || !registered.includes(redirectUri)) {
       return errorRedirect(null, 'invalid_redirect_uri', 'redirect_uri does not match registered URIs', state)
     }
 
     if (!codeChallenge || typeof codeChallenge !== 'string') {
-      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge is required', state)
+      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge is required', state, issuer)
     }
 
     if (codeChallengeMethod !== 'S256') {
-      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge_method must be S256', state)
+      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge_method must be S256', state, issuer)
     }
 
     if (!validateCodeChallenge(codeChallenge)) {
-      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge must be 43 base64url characters (RFC 7636 S256)', state)
+      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge must be 43 base64url characters (RFC 7636 S256)', state, issuer)
     }
 
     // Validate scope against operator-enabled capabilities (RFC 6749 §4.1.2.1)
     if (scope && mcpPluginOptions) {
       const scopeResult = scopeToCapabilities(scope, mcpPluginOptions)
-      if (!scopeResult.valid) {
-        return errorRedirect(redirectUri, 'invalid_scope', `Unknown or unsupported scope: ${scopeResult.invalidScopes.join(' ')}`, state)
+      if (scopeResult.kind === 'invalid') {
+        return errorRedirect(redirectUri, 'invalid_scope', `Unknown or unsupported scope: ${scopeResult.invalidScopes.join(' ')}`, state, issuer)
       }
     }
 
     // state is RECOMMENDED but optional per OAuth 2.1 — do not reject absent state
     const user = req.user
     if (!user) {
-      const resolvedLogin = loginPath ?? `${adminPath}/login`
       // Use path+search only — avoids localhost vs tunnel protocol mismatch
-      let returnPath = '/api/oauth/authorize'
+      let returnPath = authorizePath
       try {
         const u = new URL(req.url ?? '')
         returnPath = u.pathname + u.search
       } catch {
         // req.url was a relative path already
-        returnPath = req.url ?? '/api/oauth/authorize'
+        returnPath = req.url ?? authorizePath
       }
-      return redirectResponse(`${resolvedLogin}?redirect=${encodeURIComponent(returnPath)}`)
+      return redirectResponse(`${loginPath}?redirect=${encodeURIComponent(returnPath)}`)
     }
 
     const clientName = String(client['clientName'] ?? clientId)

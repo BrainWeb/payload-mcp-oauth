@@ -27,8 +27,9 @@ export interface PayloadMcpOAuthConfig {
    * ```
    *
    * If you pass a different object, `overrideAuth` is installed on an object the
-   * MCP handler never sees, and OAuth tokens silently fail to authenticate while
-   * the API-key path keeps working.
+   * MCP handler never sees. Since 0.5.0 that is detected at boot and throws
+   * `MCP_OPTIONS_NOT_SHARED` — previously it failed silently at runtime, with
+   * OAuth tokens 401ing while the API-key path kept working.
    */
   mcpPluginOptions: MCPPluginConfig
 
@@ -78,6 +79,20 @@ export interface PayloadMcpOAuthConfig {
   adminAccess?: Access
 
   /**
+   * Where to send an unauthenticated user to sign in during the authorize flow,
+   * as an app-absolute path (e.g. `/staff/login`).
+   *
+   * Defaults to your Payload admin login route, read from the config —
+   * `routes.admin` joined with `admin.routes.login`, so customising either is
+   * picked up automatically. Set this only if your sign-in page lives outside
+   * the admin panel entirely.
+   *
+   * Until 0.5.0 this was hardcoded to `/admin/login`, so an app with a custom
+   * admin route sent users to a 404 in the middle of the OAuth flow.
+   */
+  loginPath?: string
+
+  /**
    * Lifetime of issued access tokens in seconds.
    *
    * Until 0.4.0 this value was resolved but never passed to the token endpoint,
@@ -109,10 +124,16 @@ export interface PayloadMcpOAuthConfig {
    * That header is client-supplied unless something upstream overwrites it, so
    * these limits only hold when the app sits behind a proxy/load balancer that
    * sets `x-forwarded-for` itself. Exposed directly to the internet, a caller
-   * can rotate the header to mint a fresh quota per request. The limits are a
-   * speed bump against casual abuse, never the only control — PKCE, the
-   * single-use CSRF nonce and the session gate are what actually protect the
-   * flow.
+   * can rotate the header to mint a fresh quota per request.
+   *
+   * ⚠️ Buckets live in the memory of a single process. Across several instances
+   * — or on serverless, where each cold start begins empty — the effective limit
+   * is the configured one multiplied by however many processes are live, and on
+   * short-lived functions it may never bind at all.
+   *
+   * The limits are a speed bump against casual abuse, never the only control —
+   * PKCE, the single-use CSRF nonce and the session gate are what actually
+   * protect the flow.
    */
   rateLimits?: RateLimitOptions
 }

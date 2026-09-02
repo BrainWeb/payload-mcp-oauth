@@ -22,6 +22,14 @@ export function hashToken(plaintext: string): string {
   return crypto.createHmac('sha256', getPepper()).update(plaintext).digest('hex')
 }
 
+/**
+ * Constant-time comparison of a token against a stored hash.
+ *
+ * Not used by the current flows — every lookup is an indexed query on the hash
+ * itself, which never compares secrets in application code. Kept as the correct
+ * primitive for any future path that does hold both values (e.g. verifying a
+ * token against a row already in hand), so that path does not reach for `===`.
+ */
 export function compareTokenHash(plaintext: string, storedHash: string): boolean {
   const computed = Buffer.from(hashToken(plaintext), 'hex')
   const stored = Buffer.from(storedHash, 'hex')

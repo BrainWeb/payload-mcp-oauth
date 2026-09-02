@@ -1,4 +1,5 @@
 import type { Access, CollectionConfig, Config, Endpoint, PayloadRequest } from 'payload'
+import type { MCPPluginConfig } from '@payloadcms/plugin-mcp'
 import type { PayloadMcpOAuthConfig, ResolvedConfig } from './types.js'
 import { oauthAuthCodesCollection } from './collections/auth-codes.js'
 import { oauthClientsCollection } from './collections/clients.js'
@@ -14,6 +15,8 @@ import { makeTokenHandler } from './endpoints/token.js'
 import { isOAuthAdmin } from './admin/is-admin.js'
 import { createRateLimitStore, rateLimitKey } from './middleware/rate-limit.js'
 import { wrapMcpEndpointHandler } from './middleware/wrap-mcp.js'
+import { isLoopbackUrl } from './lib/loopback.js'
+import { buildSupportedScopes } from './lib/scope.js'
 import { OAUTH_AS_METADATA_PATH, OAUTH_PRM_METADATA_PATH } from './lib/paths.js'
 import { PayloadMcpOAuthError } from './types.js'
 
@@ -52,10 +55,32 @@ function resolveConfig(options: PayloadMcpOAuthConfig): ResolvedConfig {
   }
   // In production the issuer (and every advertised OAuth endpoint) must be HTTPS:
   // auth codes and bearer tokens travel to/from these URLs.
+  //
+  // Loopback is exempt. `next build` and `next start` set NODE_ENV=production
+  // unconditionally, so this fired on a local production build — a routine
+  // pre-deploy check — and there was no way through it short of deploying first
+  // or removing the plugin (#71). A loopback issuer is not reachable off the
+  // machine, so there is no transport to intercept; this is the same allowance
+  // the Dynamic Client Registration redirect_uri validator already made, now
+  // sharing one definition with it.
   if (process.env['NODE_ENV'] === 'production' && issuerUrl.protocol !== 'https:') {
-    throw new PayloadMcpOAuthError(
-      'INSECURE_ISSUER',
-      `payloadMcpOAuth: issuer must use https:// in production, got "${issuer}"`,
+    if (!isLoopbackUrl(issuerUrl)) {
+      throw new PayloadMcpOAuthError(
+        'INSECURE_ISSUER',
+        `payloadMcpOAuth: issuer must use https:// in production, got "${issuer}"`,
+      )
+    }
+    // The exemption keeps `next build` working locally, but it also removes the
+    // boot error that used to catch a real deployment whose SERVER_URL was never
+    // set — many starters fall back to http://localhost:3000, and the app would
+    // then publish an unreachable issuer in its discovery documents, which is far
+    // harder to diagnose than a boot failure. Warn loudly so that case still has
+    // a signal, without reintroducing the friction this exemption exists to fix.
+    console.warn(
+      `[payloadMcpOAuth] Booting with the loopback issuer "${issuer}" while NODE_ENV=production. ` +
+        `That is expected for a local \`next build\`/\`next start\`. If this IS a deployment, the ` +
+        `OAuth discovery documents will advertise "${issuer}", which clients cannot reach — set ` +
+        `your public https:// URL (e.g. NEXT_PUBLIC_SERVER_URL) and restart.`,
     )
   }
 
@@ -74,9 +99,19 @@ function resolveConfig(options: PayloadMcpOAuthConfig): ResolvedConfig {
   const nodeEnv = process.env['NODE_ENV']
   const isDevOrTest = nodeEnv === 'development' || nodeEnv === 'test'
   if ((!pepper || pepper.length < 32) && !isDevOrTest) {
+    // Deliberately NOT exempted for a loopback issuer, unlike the HTTPS check
+    // above. The pepper is what makes stored token hashes unforgeable, and the
+    // built-in dev fallback ships inside the published package — relaxing it
+    // would weaken data at rest, whereas the HTTPS exemption only concerns a
+    // transport that does not exist on loopback. A local `next build` reaches
+    // here too, so the message names that case rather than assuming a deploy.
     throw new PayloadMcpOAuthError(
       'MISSING_PEPPER',
-      'PMOAUTH_TOKEN_PEPPER must be set to a string of at least 32 characters (the insecure dev fallback is only used when NODE_ENV is "development" or "test")',
+      'PMOAUTH_TOKEN_PEPPER must be set to a string of at least 32 characters. ' +
+        'The insecure built-in fallback is only used when NODE_ENV is "development" or "test", ' +
+        'and `next build` / `next start` set NODE_ENV=production even for a local build — ' +
+        'so add PMOAUTH_TOKEN_PEPPER to your local .env as well as your deployment. ' +
+        'Generate one with: openssl rand -hex 32',
     )
   }
 
@@ -155,17 +190,70 @@ function oauthCollections(adminAccess: Access): CollectionConfig[] {
   ]
 }
 
-function detectMcpEndpoints(config: Config): Endpoint[] {
-  const endpoints = config.endpoints ?? []
-  const mcp = endpoints.filter((e) => e.path === '/mcp' || e.path === '/api/mcp')
-  if (mcp.length === 0) {
-    throw new PayloadMcpOAuthError(
-      'PLUGIN_ORDER',
-      'payloadMcpOAuth must be registered AFTER mcpPlugin() in the plugins array. ' +
-        'No /mcp endpoint found in incomingConfig — ensure mcpPlugin() runs first.',
-    )
-  }
-  return mcp
+/** The endpoint `@payloadcms/plugin-mcp` registers, by path. */
+function isMcpEndpoint(endpoint: Endpoint): boolean {
+  return endpoint.path === '/mcp' || endpoint.path === '/api/mcp'
+}
+
+/** The slug `@payloadcms/plugin-mcp` registers itself under via `definePlugin`. */
+const MCP_PLUGIN_SLUG = '@payloadcms/plugin-mcp'
+
+/**
+ * Catches the single most damaging setup mistake: passing a COPY of the MCP
+ * options to one plugin and the original to the other.
+ *
+ * `installOverrideAuth` mutates the object it is given, and the MCP handler only
+ * sees that mutation if it is the same object the consumer passed to
+ * `mcpPlugin()`. Payload's `definePlugin` spreads the options into a fresh
+ * object when it runs the plugin (`{...options, config, plugins}`), and
+ * `plugin-mcp` spreads again, so the handler captures a copy taken at
+ * plugin-run time — a mutation applied to any other object, or to the right one
+ * too late, is invisible. The symptom is OAuth tokens silently 401ing while API
+ * keys keep working, which looks like a token bug and is not.
+ *
+ * `definePlugin` keeps the consumer's ORIGINAL options object on the plugin
+ * function as `.options`, and the plugin functions are still on the config when
+ * we run, so we can compare identity and say exactly what went wrong.
+ *
+ * Stays silent unless it positively identifies a mismatch: an older
+ * `plugin-mcp` without a slug, or a config whose `plugins` array has been
+ * dropped, gives no evidence either way, and guessing would break working
+ * setups.
+ */
+function assertSharedMcpOptions(config: Config, mcpPluginOptions: MCPPluginConfig): void {
+  const plugins = config.plugins
+  if (!Array.isArray(plugins)) return
+
+  const mcp = plugins.find(
+    (p): p is typeof p & { options?: unknown } =>
+      typeof p === 'function' && (p as { slug?: string }).slug === MCP_PLUGIN_SLUG,
+  )
+  if (!mcp || !('options' in mcp) || typeof mcp.options !== 'object' || mcp.options === null) return
+
+  if (mcp.options === mcpPluginOptions) return
+
+  throw new PayloadMcpOAuthError(
+    'MCP_OPTIONS_NOT_SHARED',
+    'payloadMcpOAuth: `mcpPluginOptions` is not the same object you passed to mcpPlugin(). ' +
+      'The OAuth token validator is installed on the object you give us, and the MCP handler ' +
+      'only reads the one it was given — so OAuth tokens would fail with 401 while API keys ' +
+      'kept working. Assign the options to a const and pass that SAME const to both:\n\n' +
+      '  const mcpOptions: MCPPluginConfig = { collections: { ... } }\n' +
+      '  plugins: [\n' +
+      '    mcpPlugin(mcpOptions),\n' +
+      '    payloadMcpOAuth({ issuer, mcpPluginOptions: mcpOptions }),\n' +
+      '  ]\n\n' +
+      'A spread or a fresh object literal in either place will not work.',
+  )
+}
+
+function assertMcpPluginRanFirst(config: Config): void {
+  if ((config.endpoints ?? []).some(isMcpEndpoint)) return
+  throw new PayloadMcpOAuthError(
+    'PLUGIN_ORDER',
+    'payloadMcpOAuth must be registered AFTER mcpPlugin() in the plugins array. ' +
+      'No /mcp endpoint found in incomingConfig — ensure mcpPlugin() runs first.',
+  )
 }
 
 function warnIfVersionUntested(): void {
@@ -212,7 +300,8 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
   }
 
   const resolved = resolveConfig(options)
-  const mcpEndpoints = detectMcpEndpoints(incomingConfig)
+  assertMcpPluginRanFirst(incomingConfig)
+  assertSharedMcpOptions(incomingConfig, resolved.mcpPluginOptions)
   warnIfVersionUntested()
 
   // T5.4: wrap MCP endpoint handlers to convert OAuthInvalidTokenError → 401
@@ -220,15 +309,33 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
   // Pass the canonical full pathname (e.g. /api/mcp) so the wrapper can patch
   // req.url after a Next.js middleware rewrite, otherwise the downstream
   // mcp-handler URL match (url.pathname === streamableHttpEndpoint) fails.
+  //
+  // Derive NEW endpoint objects rather than reassigning `handler` on the ones
+  // Payload handed us (#50). The returned config used to share those objects
+  // with `incomingConfig`, so building the config mutated its own input —
+  // against the "never mutate incoming config" rule in Payload's plugin docs,
+  // and not idempotent: wrapping the same object twice would stack wrappers.
   const apiBase = (incomingConfig.routes?.api ?? '/api').replace(/\/$/, '')
-  for (const endpoint of mcpEndpoints) {
-    if (typeof endpoint.handler === 'function') {
-      const endpointPath = endpoint.path.startsWith('/api/')
-        ? endpoint.path
-        : `${apiBase}${endpoint.path.startsWith('/') ? endpoint.path : `/${endpoint.path}`}`
-      endpoint.handler = wrapMcpEndpointHandler(endpoint.handler, resolved.issuer, endpointPath)
+
+  // Both the admin mount point and the login route within it are configurable,
+  // and the login redirect has to honour both. This used to pass a hardcoded
+  // '/admin', so an app that customised either sent users mid-flow to a URL
+  // that does not exist — with no way to override it. `routes.admin` may be '/',
+  // which the trailing-slash strip turns into '' so the join stays single-slashed.
+  const adminBase = (incomingConfig.routes?.admin ?? '/admin').replace(/\/$/, '')
+  const loginRoute = incomingConfig.admin?.routes?.login ?? '/login'
+  const loginPath = options.loginPath ?? `${adminBase}${loginRoute}`
+
+  const wrappedEndpoints = (incomingConfig.endpoints ?? []).map((endpoint) => {
+    if (!isMcpEndpoint(endpoint) || typeof endpoint.handler !== 'function') return endpoint
+    const endpointPath = endpoint.path.startsWith('/api/')
+      ? endpoint.path
+      : `${apiBase}${endpoint.path.startsWith('/') ? endpoint.path : `/${endpoint.path}`}`
+    return {
+      ...endpoint,
+      handler: wrapMcpEndpointHandler(endpoint.handler, resolved.issuer, endpointPath),
     }
-  }
+  })
 
   // T5.5: build rate limiters
   const rateLimits = createRateLimitStore(resolved.rateLimits)
@@ -254,17 +361,22 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
 
   const corsPreflightHandler = () => new Response(null, { status: 204, headers: CORS_HEADERS })
 
+  // Advertised in both discovery documents so a client can discover what it may
+  // ask for. Computed once at config-build time — the operator's enabled
+  // capabilities cannot change without a restart.
+  const scopesSupported = buildSupportedScopes(resolved.mcpPluginOptions)
+
   // T5.5: build OAuth endpoints
   const oauthEndpoints: Endpoint[] = [
     {
       path: OAUTH_AS_METADATA_PATH,
       method: 'get',
-      handler: makeAsMetadataHandler(resolved.issuer, apiBase),
+      handler: makeAsMetadataHandler(resolved.issuer, apiBase, scopesSupported),
     },
     {
       path: OAUTH_PRM_METADATA_PATH,
       method: 'get',
-      handler: makePrmMetadataHandler(resolved.issuer),
+      handler: makePrmMetadataHandler(resolved.issuer, scopesSupported),
     },
     {
       path: '/oauth/register',
@@ -275,7 +387,16 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
     {
       path: '/oauth/authorize',
       method: 'get',
-      handler: withRateLimit(rateLimits.authorize, makeAuthorizeHandler('/admin', undefined, `${apiBase}/oauth/consent`, resolved.mcpPluginOptions)),
+      handler: withRateLimit(
+        rateLimits.authorize,
+        makeAuthorizeHandler({
+          loginPath,
+          consentPath: `${apiBase}/oauth/consent`,
+          authorizePath: `${apiBase}/oauth/authorize`,
+          mcpPluginOptions: resolved.mcpPluginOptions,
+          issuer: resolved.issuer,
+        }),
+      ),
     },
     {
       path: '/oauth/consent',
@@ -311,6 +432,6 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
   return {
     ...incomingConfig,
     collections,
-    endpoints: [...(incomingConfig.endpoints ?? []), ...oauthEndpoints],
+    endpoints: [...wrappedEndpoints, ...oauthEndpoints],
   }
 }

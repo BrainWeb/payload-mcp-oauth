@@ -12,6 +12,13 @@ interface Bucket {
   resetAt: number
 }
 
+/**
+ * An in-memory fixed-window limiter, scoped to ONE process. Several app
+ * instances each keep their own buckets, so the effective ceiling is this limit
+ * times the instance count; on serverless a cold start begins with none at all.
+ * See the `rateLimits` docs in types.ts — these limits are a speed bump, not the
+ * control the flow's security rests on.
+ */
 export function createRateLimiter(config: RateLimitConfig): RateLimiter {
   const buckets = new Map<string, Bucket>()
 

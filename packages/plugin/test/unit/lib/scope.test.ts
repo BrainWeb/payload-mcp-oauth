@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { toCamelCase, buildFullCapabilities, scopeToCapabilities } from '../../../src/lib/scope.js'
+import {
+  toCamelCase,
+  buildFullCapabilities,
+  buildSupportedScopes,
+  intersectCapabilities,
+  scopeToCapabilities,
+} from '../../../src/lib/scope.js'
+import type { ScopeResult } from '../../../src/lib/scope.js'
 import type { MCPPluginConfig } from '@payloadcms/plugin-mcp'
 
 const MCP_OPTIONS: MCPPluginConfig = {
@@ -13,6 +20,18 @@ const MCP_OPTIONS: MCPPluginConfig = {
     settings: { enabled: true },
     'site-config': { enabled: { find: true } as never },
   },
+}
+
+/** Narrows a ScopeResult to its granted capabilities, failing loudly on any other kind. */
+function caps(r: ScopeResult): Record<string, unknown> {
+  if (r.kind !== 'scoped') throw new Error(`expected kind "scoped", got "${r.kind}"`)
+  return r.capabilities
+}
+
+/** Narrows a ScopeResult to its rejected scope tokens. */
+function invalid(r: ScopeResult): string[] {
+  if (r.kind !== 'invalid') throw new Error(`expected kind "invalid", got "${r.kind}"`)
+  return r.invalidScopes
 }
 
 describe('toCamelCase', () => {
@@ -54,139 +73,275 @@ describe('buildFullCapabilities', () => {
 })
 
 describe('scopeToCapabilities — empty scope', () => {
-  it('returns valid with empty capabilities for empty string (full-grant fallback)', () => {
-    const r = scopeToCapabilities('', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.invalidScopes).toEqual([])
-    expect(r.capabilities).toEqual({})
+  it('returns kind "full" for an empty string — never an empty capability set', () => {
+    // Regression guard for #75: an omitted scope means RFC 6749 §3.3's
+    // pre-defined default (the full operator grant), NOT zero capabilities.
+    // The two used to be indistinguishable, which is how issuance and
+    // overrideAuth ended up disagreeing about what an empty scope meant.
+    expect(scopeToCapabilities('', MCP_OPTIONS)).toEqual({ kind: 'full' })
   })
 
-  it('returns valid with empty capabilities for whitespace-only scope', () => {
-    expect(scopeToCapabilities('   ', MCP_OPTIONS).valid).toBe(true)
+  it('returns kind "full" for a whitespace-only scope', () => {
+    expect(scopeToCapabilities('   ', MCP_OPTIONS)).toEqual({ kind: 'full' })
+  })
+
+  it('distinguishes "full" from "invalid" — the two former {} cases', () => {
+    expect(scopeToCapabilities('', MCP_OPTIONS).kind).toBe('full')
+    expect(scopeToCapabilities('nope:read', MCP_OPTIONS).kind).toBe('invalid')
   })
 })
 
 describe('scopeToCapabilities — collection scopes', () => {
   it('maps <slug>:read → { find: true }', () => {
     const r = scopeToCapabilities('posts:read', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.capabilities['posts']).toEqual({ find: true })
+    expect(caps(r)['posts']).toEqual({ find: true })
   })
 
   it('maps <slug>:write → { create: true, update: true }', () => {
     const r = scopeToCapabilities('posts:write', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.capabilities['posts']).toEqual({ create: true, update: true })
+    expect(caps(r)['posts']).toEqual({ create: true, update: true })
   })
 
   it('maps <slug>:delete → { delete: true }', () => {
     const r = scopeToCapabilities('posts:delete', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.capabilities['posts']).toEqual({ delete: true })
+    expect(caps(r)['posts']).toEqual({ delete: true })
   })
 
   it('rejects write when any required op is not enabled (no partial widening)', () => {
     // media has find+create only; write needs create+update — update not enabled
     const r = scopeToCapabilities('media:write', MCP_OPTIONS)
-    expect(r.valid).toBe(false)
-    expect(r.invalidScopes).toContain('media:write')
-    expect(r.capabilities).toEqual({})
+    expect(invalid(r)).toContain('media:write')
   })
 
   it('accepts write when all required ops are enabled', () => {
     // posts has all ops enabled
     const r = scopeToCapabilities('posts:write', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
+    expect(r.kind).toBe('scoped')
   })
 
   it('rejects write for a read-only collection (no create/update)', () => {
     const r = scopeToCapabilities('read-only:write', MCP_OPTIONS)
-    expect(r.valid).toBe(false)
+    expect(r.kind).toBe('invalid')
   })
 
   it('converts hyphenated slug to camelCase key', () => {
     const r = scopeToCapabilities('blog-posts:read', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.capabilities['blogPosts']).toEqual({ find: true })
+    expect(caps(r)['blogPosts']).toEqual({ find: true })
   })
 })
 
 describe('scopeToCapabilities — global scopes', () => {
   it('maps global <slug>:read → { find: true }', () => {
     const r = scopeToCapabilities('settings:read', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.capabilities['settings']).toEqual({ find: true })
+    expect(caps(r)['settings']).toEqual({ find: true })
   })
 
   it('maps global <slug>:write → { update: true }', () => {
     const r = scopeToCapabilities('settings:write', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.capabilities['settings']).toEqual({ update: true })
+    expect(caps(r)['settings']).toEqual({ update: true })
   })
 
   it('rejects delete for globals (no delete operation)', () => {
     const r = scopeToCapabilities('settings:delete', MCP_OPTIONS)
-    expect(r.valid).toBe(false)
-    expect(r.invalidScopes).toContain('settings:delete')
+    expect(r.kind).toBe('invalid')
+    expect(invalid(r)).toContain('settings:delete')
   })
 
   it('rejects when op is not enabled for a partial global', () => {
     // site-config has only find enabled; write needs update which is not enabled
     const r = scopeToCapabilities('site-config:write', MCP_OPTIONS)
-    expect(r.valid).toBe(false)
+    expect(r.kind).toBe('invalid')
   })
 })
 
 describe('scopeToCapabilities — multi-token scopes', () => {
   it('combines capabilities across multiple tokens for the same slug', () => {
     const r = scopeToCapabilities('posts:read posts:delete', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.capabilities['posts']).toEqual({ find: true, delete: true })
+    expect(caps(r)['posts']).toEqual({ find: true, delete: true })
   })
 
   it('combines capabilities across different slugs', () => {
     const r = scopeToCapabilities('posts:read settings:write', MCP_OPTIONS)
-    expect(r.valid).toBe(true)
-    expect(r.capabilities['posts']).toEqual({ find: true })
-    expect(r.capabilities['settings']).toEqual({ update: true })
+    expect(caps(r)['posts']).toEqual({ find: true })
+    expect(caps(r)['settings']).toEqual({ update: true })
   })
 
   it('fails the entire result when any token is invalid', () => {
     const r = scopeToCapabilities('posts:read unknown:read', MCP_OPTIONS)
-    expect(r.valid).toBe(false)
-    expect(r.invalidScopes).toContain('unknown:read')
-    // No partial capabilities leaked — the entire grant is rejected
-    expect(r.capabilities).toEqual({})
+    // No partial capabilities leaked — the entire grant is rejected, and the
+    // "invalid" kind can no longer be mistaken for the full-grant "full" kind.
+    expect(invalid(r)).toContain('unknown:read')
   })
 })
 
 describe('scopeToCapabilities — invalid tokens', () => {
   it('rejects tokens without a colon separator', () => {
-    expect(scopeToCapabilities('openid', MCP_OPTIONS).valid).toBe(false)
-    expect(scopeToCapabilities('mcp', MCP_OPTIONS).valid).toBe(false)
+    expect(scopeToCapabilities('openid', MCP_OPTIONS).kind).toBe('invalid')
+    expect(scopeToCapabilities('mcp', MCP_OPTIONS).kind).toBe('invalid')
   })
 
   it('rejects tokens with a trailing colon (empty operation)', () => {
-    expect(scopeToCapabilities('posts:', MCP_OPTIONS).valid).toBe(false)
+    expect(scopeToCapabilities('posts:', MCP_OPTIONS).kind).toBe('invalid')
   })
 
   it('rejects tokens with a leading colon (empty slug)', () => {
-    expect(scopeToCapabilities(':read', MCP_OPTIONS).valid).toBe(false)
+    expect(scopeToCapabilities(':read', MCP_OPTIONS).kind).toBe('invalid')
   })
 
   it('rejects an unknown collection slug', () => {
-    expect(scopeToCapabilities('nonexistent:read', MCP_OPTIONS).valid).toBe(false)
+    expect(scopeToCapabilities('nonexistent:read', MCP_OPTIONS).kind).toBe('invalid')
   })
 
   it('rejects an unknown operation', () => {
-    expect(scopeToCapabilities('posts:list', MCP_OPTIONS).valid).toBe(false)
-    expect(scopeToCapabilities('posts:admin', MCP_OPTIONS).valid).toBe(false)
+    expect(scopeToCapabilities('posts:list', MCP_OPTIONS).kind).toBe('invalid')
+    expect(scopeToCapabilities('posts:admin', MCP_OPTIONS).kind).toBe('invalid')
   })
 
-  it('never widens: invalid scope always returns empty capabilities', () => {
-    // Even if some tokens were valid, a single invalid token nullifies the entire result
+  it('never widens: a single invalid token nullifies the whole grant', () => {
     const r = scopeToCapabilities('posts:read evil:all', MCP_OPTIONS)
-    expect(r.valid).toBe(false)
-    expect(r.capabilities).toEqual({})
+    expect(r.kind).toBe('invalid')
+    // The result carries no capabilities field at all, so no caller can read a
+    // partial grant out of it — nor mistake it for the full grant.
+    expect(r).not.toHaveProperty('capabilities')
+  })
+})
+
+describe('intersectCapabilities', () => {
+  it('keeps only operations enabled on BOTH sides', () => {
+    const stored = { posts: { find: true, delete: true } }
+    const allowed = { posts: { find: true, create: true } }
+    expect(intersectCapabilities(stored, allowed)).toEqual({ posts: { find: true } })
+  })
+
+  it('drops a capability the operator has since disabled entirely', () => {
+    // The privilege-retention case: a token issued while `posts` was enabled
+    // must not keep acting on it after the operator turns the collection off.
+    const stored = { posts: { find: true }, media: { find: true } }
+    const allowed = { media: { find: true } }
+    expect(intersectCapabilities(stored, allowed)).toEqual({ media: { find: true } })
+  })
+
+  it('drops an operation the operator has since disabled', () => {
+    const stored = { posts: { delete: true } }
+    const allowed = { posts: { find: true, create: true, update: true } }
+    expect(intersectCapabilities(stored, allowed)).toEqual({})
+  })
+
+  it('treats an explicitly false live operation as disabled', () => {
+    const stored = { posts: { delete: true } }
+    const allowed = { posts: { find: true, delete: false } }
+    expect(intersectCapabilities(stored, allowed)).toEqual({})
+  })
+
+  it('never widens: an operation absent from the stored grant is not added back', () => {
+    const stored = { posts: { find: true } }
+    const allowed = { posts: { find: true, create: true, update: true, delete: true } }
+    expect(intersectCapabilities(stored, allowed)).toEqual({ posts: { find: true } })
+  })
+
+  it('omits keys reduced to nothing rather than leaving empty objects', () => {
+    const stored = { posts: { delete: true }, media: { find: true } }
+    const allowed = { posts: { find: true }, media: { find: true } }
+    expect(intersectCapabilities(stored, allowed)).toEqual({ media: { find: true } })
+  })
+
+  it('is a no-op when the live config still allows everything stored', () => {
+    const stored = { posts: { find: true, create: true } }
+    expect(intersectCapabilities(stored, buildFullCapabilities(MCP_OPTIONS))).toEqual(stored)
+  })
+
+  it('ignores non-object entries on either side without throwing', () => {
+    expect(intersectCapabilities({ posts: 'nonsense' }, { posts: { find: true } })).toEqual({})
+    expect(intersectCapabilities({ posts: { find: true } }, { posts: null })).toEqual({})
+    expect(intersectCapabilities({ posts: { find: true } }, {})).toEqual({})
+  })
+
+  it('drops prototype-chain keys rather than assigning them onto the result', () => {
+    // `stored` is JSON read back from the database, so a key like __proto__ must
+    // never be used as an index — assigning it would corrupt the returned
+    // MCPAccessSettings object instead of adding a permission.
+    const stored = JSON.parse('{"__proto__": {"find": true}, "posts": {"find": true}}') as Record<string, unknown>
+    const allowed = JSON.parse('{"__proto__": {"find": true}, "posts": {"find": true}}') as Record<string, unknown>
+    const result = intersectCapabilities(stored, allowed)
+    expect(result).toEqual({ posts: { find: true } })
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype)
+    expect(({} as Record<string, unknown>)['find']).toBeUndefined()
+  })
+
+  it('drops prototype-chain operation names too', () => {
+    const stored = { posts: JSON.parse('{"constructor": true, "find": true}') as Record<string, unknown> }
+    const allowed = { posts: JSON.parse('{"constructor": true, "find": true}') as Record<string, unknown> }
+    expect(intersectCapabilities(stored, allowed)).toEqual({ posts: { find: true } })
+  })
+
+  it('does not treat an inherited key on the live config as an allowance', () => {
+    const stored = { toString: { find: true } }
+    expect(intersectCapabilities(stored, { posts: { find: true } })).toEqual({})
+  })
+
+  it('round-trips a full grant through the live ceiling unchanged', () => {
+    const full = buildFullCapabilities(MCP_OPTIONS)
+    expect(intersectCapabilities(full, full)).toEqual(full)
+  })
+})
+
+describe('buildSupportedScopes', () => {
+  it('lists every operation enabled on a fully-enabled collection', () => {
+    const scopes = buildSupportedScopes({ collections: { posts: { enabled: true } } })
+    expect(scopes).toEqual(['posts:read', 'posts:write', 'posts:delete'])
+  })
+
+  it('omits operations the operator has not enabled', () => {
+    // media has find+create; write needs create AND update, so it is not offered.
+    const scopes = buildSupportedScopes(MCP_OPTIONS)
+    expect(scopes).toContain('media:read')
+    expect(scopes).not.toContain('media:write')
+    expect(scopes).not.toContain('media:delete')
+  })
+
+  it('offers globals read and write but never delete', () => {
+    expect(buildSupportedScopes({ globals: { settings: { enabled: true } } })).toEqual([
+      'settings:read',
+      'settings:write',
+    ])
+  })
+
+  it('uses the raw slug, not the camelCase capability key', () => {
+    // Scope tokens are looked up by slug in scopeToCapabilities.
+    expect(buildSupportedScopes(MCP_OPTIONS)).toContain('blog-posts:read')
+    expect(buildSupportedScopes(MCP_OPTIONS)).not.toContain('blogPosts:read')
+  })
+
+  it('returns an empty list when nothing is enabled', () => {
+    expect(buildSupportedScopes({})).toEqual([])
+    expect(buildSupportedScopes({ collections: { posts: { enabled: false as never } } })).toEqual([])
+  })
+
+  it('advertises ONLY scopes that scopeToCapabilities actually grants', () => {
+    for (const scope of buildSupportedScopes(MCP_OPTIONS)) {
+      expect(scopeToCapabilities(scope, MCP_OPTIONS).kind, `scope ${scope}`).toBe('scoped')
+    }
+  })
+
+  it('advertises EVERY scope that scopeToCapabilities grants — nothing omitted', () => {
+    // The advertisement and the enforcement are separate code paths reading the
+    // same config. This is the guard that stops them drifting apart.
+    const advertised = new Set(buildSupportedScopes(MCP_OPTIONS))
+    const slugs = [
+      ...Object.keys(MCP_OPTIONS.collections ?? {}),
+      ...Object.keys(MCP_OPTIONS.globals ?? {}),
+    ]
+    for (const slug of slugs) {
+      for (const op of ['read', 'write', 'delete']) {
+        const token = `${slug}:${op}`
+        const grantable = scopeToCapabilities(token, MCP_OPTIONS).kind === 'scoped'
+        expect(advertised.has(token), `scope ${token} (grantable=${grantable})`).toBe(grantable)
+      }
+    }
+  })
+
+  it('grants the whole advertised list requested at once', () => {
+    const all = buildSupportedScopes(MCP_OPTIONS).join(' ')
+    expect(scopeToCapabilities(all, MCP_OPTIONS).kind).toBe('scoped')
   })
 })

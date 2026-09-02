@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { oauthTokensCollection } from '../../../src/collections/tokens.js'
 
 describe('oauthTokensCollection', () => {
@@ -79,5 +79,67 @@ describe('oauthTokensCollection', () => {
 
   it('has timestamps disabled', () => {
     expect(oauthTokensCollection.timestamps).toBe(false)
+  })
+})
+
+describe('oauthTokensCollection — cascadeRevokeAccessTokens', () => {
+  /** Runs the named afterChange hook against a fake req. */
+  async function runCascade(args: Record<string, unknown>, activeAccessTokens: unknown[] = []) {
+    const update = vi.fn().mockResolvedValue({})
+    const req = {
+      payload: {
+        find: vi.fn().mockResolvedValue({ docs: activeAccessTokens }),
+        update,
+      },
+    }
+    const hooks = oauthTokensCollection.hooks?.afterChange ?? []
+    for (const hook of hooks) {
+      await (hook as (a: unknown) => unknown)({ req, ...args })
+    }
+    return { update, find: req.payload.find }
+  }
+
+  const refreshDoc = {
+    id: 'refresh-1',
+    tokenType: 'refresh',
+    clientId: 'client-1',
+    userId: 'user-1',
+    revokedAt: '2026-01-01T00:00:00.000Z',
+  }
+
+  it('revokes the client+user active access tokens when a refresh token is revoked', async () => {
+    // This is the cascade the revoke endpoint relies on, so it needs its own
+    // coverage rather than being asserted indirectly through a mocked find.
+    const { update, find } = await runCascade(
+      { doc: refreshDoc, previousDoc: { ...refreshDoc, revokedAt: null }, operation: 'update' },
+      [{ id: 'access-1' }, { id: 'access-2' }],
+    )
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: 'oauth-tokens' }),
+    )
+    const revoked = update.mock.calls
+      .filter((c) => (c[0] as { data?: { revokedAt?: string } }).data?.revokedAt)
+      .map((c) => (c[0] as { id: string }).id)
+    expect(revoked).toEqual(['access-1', 'access-2'])
+  })
+
+  it('does nothing when revokedAt was already set', async () => {
+    const { update } = await runCascade(
+      { doc: refreshDoc, previousDoc: refreshDoc, operation: 'update' },
+      [{ id: 'access-1' }],
+    )
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('does nothing for an access token', async () => {
+    const { update } = await runCascade(
+      {
+        doc: { ...refreshDoc, tokenType: 'access' },
+        previousDoc: { ...refreshDoc, tokenType: 'access', revokedAt: null },
+        operation: 'update',
+      },
+      [{ id: 'access-1' }],
+    )
+    expect(update).not.toHaveBeenCalled()
   })
 })

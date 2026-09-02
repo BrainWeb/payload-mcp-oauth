@@ -47,27 +47,15 @@ export function makeRevokeHandler(): PayloadHandler {
       data: { revokedAt: now },
     })
 
-    if (doc['tokenType'] === 'refresh') {
-      const { docs: accessDocs } = await req.payload.find({
-        collection: 'oauth-tokens',
-        overrideAccess: true,
-        where: {
-          parentTokenId: { equals: String(doc['id']) },
-          revokedAt: { equals: null },
-        },
-        limit: 100,
-      })
-      await Promise.all(
-        accessDocs.map((ad) =>
-          req.payload.update({
-            collection: 'oauth-tokens',
-            overrideAccess: true,
-            id: String(ad['id']),
-            data: { revokedAt: now },
-          }),
-        ),
-      )
-    }
+    // Revoking a refresh token also revokes the access tokens issued alongside
+    // it — done by the `cascadeRevokeAccessTokens` afterChange hook on
+    // `oauth-tokens`, which the update above fires. There used to be a second
+    // cascade here that searched for tokens whose `parentTokenId` matched this
+    // one, but that never matched anything: `issueTokenPair` stamps both members
+    // of a new pair with the id of the refresh token they REPLACED, so a token's
+    // sibling never carries its id, and by the time a refresh token has children
+    // it has itself been revoked by rotation and returned above. It read like
+    // the safety net while the hook was doing the work.
 
     return jsonResponse({})
   }

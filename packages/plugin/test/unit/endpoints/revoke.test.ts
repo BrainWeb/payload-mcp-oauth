@@ -60,15 +60,22 @@ describe('makeRevokeHandler', () => {
     expect(req.payload.update).not.toHaveBeenCalled()
   })
 
-  it('cascades revocation to access tokens when revoking a refresh token', async () => {
+  it('revokes a refresh token with a single update, leaving the cascade to the collection hook', async () => {
+    // Sibling access tokens are revoked by `cascadeRevokeAccessTokens` (an
+    // afterChange hook on oauth-tokens) which this update fires. The endpoint
+    // used to run a second cascade of its own over `parentTokenId`, but that
+    // query could never match: issueTokenPair stamps both members of a pair with
+    // the id of the refresh token they REPLACED, so a token's sibling never
+    // carries its id. The old test only passed because it mocked `find` to
+    // return access tokens on the second call.
     const refreshDoc = { id: 'refresh-1', tokenHash: hashToken(VALID_REFRESH), tokenType: 'refresh', clientId: 'client-1', revokedAt: null }
     const req = makeReq({ token: VALID_REFRESH, client_id: 'client-1' }, [refreshDoc])
-    req.payload.find = vi.fn()
-      .mockResolvedValueOnce({ docs: [refreshDoc] })
-      .mockResolvedValueOnce({ docs: [{ id: 'access-1' }, { id: 'access-2' }] })
     const res = await makeRevokeHandler()(req as never)
     expect(res.status).toBe(200)
-    expect(req.payload.update).toHaveBeenCalledTimes(3)
+    expect(req.payload.update).toHaveBeenCalledTimes(1)
+    expect(req.payload.update).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: 'oauth-tokens', id: 'refresh-1' }),
+    )
   })
 
   it('returns 200 with no token in body', async () => {
