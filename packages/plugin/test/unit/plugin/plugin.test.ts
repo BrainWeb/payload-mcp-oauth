@@ -485,3 +485,33 @@ describe('buildPlugin — does not mutate the incoming config (#50)', () => {
     expect(() => buildPlugin(makeConfig([]), makeOptions())).toThrow(PayloadMcpOAuthError)
   })
 })
+
+describe('buildPlugin — discovery advertises the operator scopes', () => {
+  async function readMetadata(path: string, mcpPluginOptions: Record<string, unknown>) {
+    const result = buildPlugin(makeConfig(), makeOptions({ mcpPluginOptions: mcpPluginOptions as never }))
+    const endpoint = (result.endpoints ?? []).find((e) => e.path === path && e.method === 'get')
+    expect(endpoint).toBeDefined()
+    const res = (await endpoint!.handler({ method: 'GET' } as never)) as Response
+    return (await res.json()) as Record<string, unknown>
+  }
+
+  it('lists the enabled scopes in the authorization-server metadata', async () => {
+    const m = await readMetadata('/.well-known/oauth-authorization-server', {
+      collections: { posts: { enabled: true } },
+    })
+    expect(m['scopes_supported']).toEqual(['posts:read', 'posts:write', 'posts:delete'])
+    expect(m['authorization_response_iss_parameter_supported']).toBe(true)
+  })
+
+  it('lists the same scopes in the protected-resource metadata', async () => {
+    const m = await readMetadata('/.well-known/oauth-protected-resource', {
+      collections: { posts: { enabled: true } },
+    })
+    expect(m['scopes_supported']).toEqual(['posts:read', 'posts:write', 'posts:delete'])
+  })
+
+  it('omits scopes_supported when the operator enables nothing', async () => {
+    const m = await readMetadata('/.well-known/oauth-authorization-server', {})
+    expect(m).not.toHaveProperty('scopes_supported')
+  })
+})

@@ -15,6 +15,7 @@ import { isOAuthAdmin } from './admin/is-admin.js'
 import { createRateLimitStore, rateLimitKey } from './middleware/rate-limit.js'
 import { wrapMcpEndpointHandler } from './middleware/wrap-mcp.js'
 import { isLoopbackUrl } from './lib/loopback.js'
+import { buildSupportedScopes } from './lib/scope.js'
 import { OAUTH_AS_METADATA_PATH, OAUTH_PRM_METADATA_PATH } from './lib/paths.js'
 import { PayloadMcpOAuthError } from './types.js'
 
@@ -296,17 +297,22 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
 
   const corsPreflightHandler = () => new Response(null, { status: 204, headers: CORS_HEADERS })
 
+  // Advertised in both discovery documents so a client can discover what it may
+  // ask for. Computed once at config-build time — the operator's enabled
+  // capabilities cannot change without a restart.
+  const scopesSupported = buildSupportedScopes(resolved.mcpPluginOptions)
+
   // T5.5: build OAuth endpoints
   const oauthEndpoints: Endpoint[] = [
     {
       path: OAUTH_AS_METADATA_PATH,
       method: 'get',
-      handler: makeAsMetadataHandler(resolved.issuer, apiBase),
+      handler: makeAsMetadataHandler(resolved.issuer, apiBase, scopesSupported),
     },
     {
       path: OAUTH_PRM_METADATA_PATH,
       method: 'get',
-      handler: makePrmMetadataHandler(resolved.issuer),
+      handler: makePrmMetadataHandler(resolved.issuer, scopesSupported),
     },
     {
       path: '/oauth/register',

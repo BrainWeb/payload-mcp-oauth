@@ -32,3 +32,13 @@ describe('makePrmMetadataHandler', () => {
     expect(body['authorization_servers']).toEqual(['https://example.com'])
   })
 })
+
+describe('buildPrmMetadata — scope advertisement', () => {
+  it('advertises the scopes the resource understands', () => {
+    expect(buildPrmMetadata('https://example.com', ['posts:read']).scopes_supported).toEqual(['posts:read'])
+  })
+
+  it('omits scopes_supported entirely when nothing is scopable', () => {
+    expect(buildPrmMetadata('https://example.com')).not.toHaveProperty('scopes_supported')
+  })
+})

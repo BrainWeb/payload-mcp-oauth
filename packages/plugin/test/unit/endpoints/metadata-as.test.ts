@@ -63,3 +63,22 @@ describe('makeAsMetadataHandler', () => {
     expect(body['code_challenge_methods_supported']).toEqual(['S256'])
   })
 })
+
+describe('buildAsMetadata — scope and issuer advertisement', () => {
+  it('advertises authorization_response_iss_parameter_supported (RFC 9207)', () => {
+    // The consent redirect already sets `iss`; advertising it lets a client
+    // require and verify it instead of treating it as an unexpected extra.
+    expect(buildAsMetadata('https://example.com').authorization_response_iss_parameter_supported).toBe(true)
+  })
+
+  it('advertises the scopes the server would grant', () => {
+    const m = buildAsMetadata('https://example.com', '/api', ['posts:read', 'posts:write'])
+    expect(m.scopes_supported).toEqual(['posts:read', 'posts:write'])
+  })
+
+  it('omits scopes_supported entirely when nothing is scopable', () => {
+    // An empty array would read as "this server supports no scopes".
+    const m = buildAsMetadata('https://example.com')
+    expect(m).not.toHaveProperty('scopes_supported')
+  })
+})

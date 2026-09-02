@@ -207,6 +207,50 @@ export function scopeToCapabilities(
   return { kind: 'scoped', capabilities: capabilities as Record<string, unknown> }
 }
 
+/**
+ * Every scope token this server would accept, for `scopes_supported` in the
+ * authorization-server metadata (RFC 8414 §2, RECOMMENDED).
+ *
+ * Scope became a real privilege boundary without ever being advertised, so a
+ * client had no way to discover the scopes it could ask for and no choice but
+ * to request none. Derived from the same operator config and the same
+ * per-operation rules `scopeToCapabilities` enforces — a test asserts every
+ * token listed here is actually grantable, and that everything grantable is
+ * listed, so the advertisement cannot drift from the enforcement.
+ */
+export function buildSupportedScopes(mcpPluginOptions: MCPPluginConfig): string[] {
+  const scopes: string[] = []
+
+  const add = (
+    slug: string,
+    op: string,
+    enabledOps: Record<string, boolean>,
+    required: Record<string, boolean> | null,
+  ) => {
+    if (!required) return
+    // Same "all requested ops must be enabled" rule scopeToCapabilities applies.
+    if (Object.entries(required).every(([k, v]) => !v || enabledOps[k])) scopes.push(`${slug}:${op}`)
+  }
+
+  for (const [slug, cfg] of Object.entries(mcpPluginOptions.collections ?? {})) {
+    if (!cfg?.enabled) continue
+    const enabledOps: Record<string, boolean> =
+      cfg.enabled === true
+        ? { find: true, create: true, update: true, delete: true }
+        : (cfg.enabled as Record<string, boolean>)
+    for (const op of ['read', 'write', 'delete']) add(slug, op, enabledOps, collectionOpsFor(op))
+  }
+
+  for (const [slug, cfg] of Object.entries(mcpPluginOptions.globals ?? {})) {
+    if (!cfg?.enabled) continue
+    const enabledOps: Record<string, boolean> =
+      cfg.enabled === true ? { find: true, update: true } : (cfg.enabled as Record<string, boolean>)
+    for (const op of ['read', 'write']) add(slug, op, enabledOps, globalOpsFor(op))
+  }
+
+  return scopes
+}
+
 function collectionOpsFor(op: string): Record<string, boolean> | null {
   if (op === 'read') return { find: true }
   if (op === 'write') return { create: true, update: true }

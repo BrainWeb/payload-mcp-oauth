@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   toCamelCase,
   buildFullCapabilities,
+  buildSupportedScopes,
   intersectCapabilities,
   scopeToCapabilities,
 } from '../../../src/lib/scope.js'
@@ -281,5 +282,66 @@ describe('intersectCapabilities', () => {
   it('round-trips a full grant through the live ceiling unchanged', () => {
     const full = buildFullCapabilities(MCP_OPTIONS)
     expect(intersectCapabilities(full, full)).toEqual(full)
+  })
+})
+
+describe('buildSupportedScopes', () => {
+  it('lists every operation enabled on a fully-enabled collection', () => {
+    const scopes = buildSupportedScopes({ collections: { posts: { enabled: true } } })
+    expect(scopes).toEqual(['posts:read', 'posts:write', 'posts:delete'])
+  })
+
+  it('omits operations the operator has not enabled', () => {
+    // media has find+create; write needs create AND update, so it is not offered.
+    const scopes = buildSupportedScopes(MCP_OPTIONS)
+    expect(scopes).toContain('media:read')
+    expect(scopes).not.toContain('media:write')
+    expect(scopes).not.toContain('media:delete')
+  })
+
+  it('offers globals read and write but never delete', () => {
+    expect(buildSupportedScopes({ globals: { settings: { enabled: true } } })).toEqual([
+      'settings:read',
+      'settings:write',
+    ])
+  })
+
+  it('uses the raw slug, not the camelCase capability key', () => {
+    // Scope tokens are looked up by slug in scopeToCapabilities.
+    expect(buildSupportedScopes(MCP_OPTIONS)).toContain('blog-posts:read')
+    expect(buildSupportedScopes(MCP_OPTIONS)).not.toContain('blogPosts:read')
+  })
+
+  it('returns an empty list when nothing is enabled', () => {
+    expect(buildSupportedScopes({})).toEqual([])
+    expect(buildSupportedScopes({ collections: { posts: { enabled: false as never } } })).toEqual([])
+  })
+
+  it('advertises ONLY scopes that scopeToCapabilities actually grants', () => {
+    for (const scope of buildSupportedScopes(MCP_OPTIONS)) {
+      expect(scopeToCapabilities(scope, MCP_OPTIONS).kind, `scope ${scope}`).toBe('scoped')
+    }
+  })
+
+  it('advertises EVERY scope that scopeToCapabilities grants — nothing omitted', () => {
+    // The advertisement and the enforcement are separate code paths reading the
+    // same config. This is the guard that stops them drifting apart.
+    const advertised = new Set(buildSupportedScopes(MCP_OPTIONS))
+    const slugs = [
+      ...Object.keys(MCP_OPTIONS.collections ?? {}),
+      ...Object.keys(MCP_OPTIONS.globals ?? {}),
+    ]
+    for (const slug of slugs) {
+      for (const op of ['read', 'write', 'delete']) {
+        const token = `${slug}:${op}`
+        const grantable = scopeToCapabilities(token, MCP_OPTIONS).kind === 'scoped'
+        expect(advertised.has(token), `scope ${token} (grantable=${grantable})`).toBe(grantable)
+      }
+    }
+  })
+
+  it('grants the whole advertised list requested at once', () => {
+    const all = buildSupportedScopes(MCP_OPTIONS).join(' ')
+    expect(scopeToCapabilities(all, MCP_OPTIONS).kind).toBe('scoped')
   })
 })
