@@ -74,6 +74,12 @@ export function makeConsentHandler(authCodeTtlSeconds = 300, issuer = '', mcpPlu
         url.searchParams.set('error', 'access_denied')
         url.searchParams.set('error_description', 'The user denied the authorization request')
         if (state) url.searchParams.set('state', state)
+        // RFC 9207 §2 requires `iss` on ALL authorization responses, errors
+        // included. Without it a client that honours our advertised
+        // `authorization_response_iss_parameter_supported` must reject the
+        // response (§2.4) — turning "the user pressed Deny" into a protocol
+        // violation instead of a clean access_denied.
+        if (issuer) url.searchParams.set('iss', issuer)
         return redirectResponse(url.toString())
       }
 

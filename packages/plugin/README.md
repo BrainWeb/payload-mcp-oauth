@@ -344,9 +344,12 @@ Scope can only ever *narrow*:
 - The scope is validated at `/authorize`, re-validated at `/consent` (so
   tampering with the hidden form field is caught), and resolved again when the
   code is redeemed.
-- The granted capabilities are intersected with your **live** config on every
-  request, so disabling a collection narrows existing tokens on their next call
-  rather than when they expire.
+- Grants are resolved against your **live** config on every request, not frozen
+  at consent. A **scoped** grant names a fixed set, so it can only shrink —
+  disabling an operation removes it from existing tokens on their next call. A
+  **no-scope** grant means "whatever is enabled now", so it tracks the config in
+  both directions: enable a new collection and an already-connected client picks
+  it up, with no re-authorisation.
 
 The exact set your server accepts is published in
 `/.well-known/oauth-authorization-server` as `scopes_supported`, derived from

@@ -60,29 +60,35 @@ export function installOverrideAuth(mcpPluginOptions: MCPPluginConfig, userColle
 
     req.payload.logger?.info(`[pmoauth] overrideAuth: success, returning MCPAccessSettings`)
 
-    // The live ceiling: what the operator has enabled RIGHT NOW. A token can
-    // never exceed it, however it was granted.
+    // What the operator has enabled RIGHT NOW. Recomputed every request so a
+    // config change takes effect on the next call, not when tokens expire.
     const allowed = buildFullCapabilities(mcpPluginOptions)
-    const hasStoredGrant = Object.keys(ctx.capabilities).length > 0
+
+    // The SCOPE is what says which kind of grant this is — never the stored
+    // capability set, whose emptiness was ambiguous and is what #75 was about.
+    const isFullGrant = ctx.scope.trim() === ''
 
     let capabilities: Record<string, unknown>
-    if (hasStoredGrant) {
-      // Narrow the stored grant to the live config. Previously the stored set was
-      // used verbatim, so a token issued while `posts.delete` was enabled kept
-      // deleting posts for its full lifetime after the operator turned that off.
-      capabilities = intersectCapabilities(ctx.capabilities, allowed)
-    } else if (ctx.scope.trim() === '') {
-      // Legacy full grant: tokens issued up to 0.4.0 stored `{}` for an omitted
-      // scope. The empty SCOPE (not the empty capability set) is what identifies
-      // them — that distinction is the bug this branch exists to survive. They
-      // resolve to the full operator grant, exactly as they did before.
+    if (isFullGrant) {
+      // "Everything the operator has enabled" is a standing instruction, not a
+      // snapshot: resolve it live so enabling a new collection reaches existing
+      // connections, and disabling one narrows them, without re-authorising.
+      // The stored capabilities remain the audit record of what the grant meant
+      // at consent time; they are deliberately NOT used as a ceiling here, or
+      // adding a collection would never reach a live connector.
       capabilities = allowed
+    } else if (Object.keys(ctx.capabilities).length > 0) {
+      // A narrowed grant is a fixed set, so it can only ever shrink. Intersect
+      // with the live config: previously the stored set was used verbatim, so a
+      // token issued while `posts.delete` was enabled kept deleting posts for
+      // its whole lifetime after the operator turned that off.
+      capabilities = intersectCapabilities(ctx.capabilities, allowed)
     } else {
-      // Empty stored grant against a non-empty scope is a contradiction no
+      // A non-empty scope with no stored capabilities is a contradiction no
       // issuance path can produce: a valid scope always yields at least one
-      // capability, and an invalid one is refused at the token endpoint. So the
-      // row is corrupt. Fail closed with a 401 rather than guessing — that also
-      // prompts the client to re-authorize, which repairs the record.
+      // capability, and an invalid one is refused at the token endpoint. The row
+      // is corrupt — fail closed rather than guess. The 401 prompts the client
+      // to re-authorize, which rewrites the record correctly.
       req.payload.logger?.error(
         `[pmoauth] overrideAuth: token ${ctx.tokenId} stores no capabilities but requests scope "${ctx.scope}" — refusing`,
       )

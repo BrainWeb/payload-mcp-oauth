@@ -66,3 +66,17 @@ describe('payloadMcpOAuth — overrideAuth is installed EAGERLY', () => {
     expect(mcpPluginOptions.overrideAuth).toBeUndefined()
   })
 })
+
+describe('payloadMcpOAuth — no runtime dependency on newer Payload APIs', () => {
+  it('imports no value bindings from `payload` in the entry module', async () => {
+    // `definePlugin` only exists from payload 3.83.0 and the peer range is
+    // ^3.0.0, so importing it would break consumers below that at module load
+    // — ESM with "does not provide an export named 'definePlugin'", CJS with
+    // "definePlugin is not a function". The plugin metadata is set by hand
+    // instead, which needs no import at all.
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(new URL('../../../src/index.ts', import.meta.url), 'utf8')
+    const payloadImports = source.match(/^import\s+(?!type\b).*from\s+'payload'/gm) ?? []
+    expect(payloadImports).toEqual([])
+  })
+})

@@ -99,7 +99,20 @@ export function readRegisteredUris(client: Record<string, unknown>): string[] {
     .filter((uri): uri is string => typeof uri === 'string')
 }
 
-function errorRedirect(redirectUri: string | null, error: string, description: string, state?: string): Response {
+/**
+ * @param issuer Included as `iss` per RFC 9207 §2, which requires it on ALL
+ *   authorization responses — error responses included. The AS metadata
+ *   advertises `authorization_response_iss_parameter_supported`, and §2.4 says a
+ *   client MUST then reject a response without it: omitting `iss` here would
+ *   turn an ordinary `invalid_scope` into a protocol violation at the client.
+ */
+function errorRedirect(
+  redirectUri: string | null,
+  error: string,
+  description: string,
+  state?: string,
+  issuer?: string,
+): Response {
   if (!redirectUri) {
     return oauthErrorResponse(400, error, description)
   }
@@ -107,6 +120,7 @@ function errorRedirect(redirectUri: string | null, error: string, description: s
   url.searchParams.set('error', error)
   url.searchParams.set('error_description', description)
   if (state) url.searchParams.set('state', state)
+  if (issuer) url.searchParams.set('iss', issuer)
   return redirectResponse(url.toString())
 }
 
@@ -127,6 +141,8 @@ export interface AuthorizeHandlerOptions {
   authorizePath?: string
   /** Enables scope validation and the narrowed-grant consent copy. */
   mcpPluginOptions?: MCPPluginConfig
+  /** The OAuth issuer, echoed as `iss` on error redirects (RFC 9207 §2). */
+  issuer?: string
 }
 
 /**
@@ -140,6 +156,7 @@ export function makeAuthorizeHandler(options: AuthorizeHandlerOptions = {}): Pay
     consentPath = '/api/oauth/consent',
     authorizePath = '/api/oauth/authorize',
     mcpPluginOptions,
+    issuer,
   } = options
 
   return async (req) => {
@@ -179,22 +196,22 @@ export function makeAuthorizeHandler(options: AuthorizeHandlerOptions = {}): Pay
     }
 
     if (!codeChallenge || typeof codeChallenge !== 'string') {
-      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge is required', state)
+      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge is required', state, issuer)
     }
 
     if (codeChallengeMethod !== 'S256') {
-      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge_method must be S256', state)
+      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge_method must be S256', state, issuer)
     }
 
     if (!validateCodeChallenge(codeChallenge)) {
-      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge must be 43 base64url characters (RFC 7636 S256)', state)
+      return errorRedirect(redirectUri, 'invalid_request', 'code_challenge must be 43 base64url characters (RFC 7636 S256)', state, issuer)
     }
 
     // Validate scope against operator-enabled capabilities (RFC 6749 §4.1.2.1)
     if (scope && mcpPluginOptions) {
       const scopeResult = scopeToCapabilities(scope, mcpPluginOptions)
       if (scopeResult.kind === 'invalid') {
-        return errorRedirect(redirectUri, 'invalid_scope', `Unknown or unsupported scope: ${scopeResult.invalidScopes.join(' ')}`, state)
+        return errorRedirect(redirectUri, 'invalid_scope', `Unknown or unsupported scope: ${scopeResult.invalidScopes.join(' ')}`, state, issuer)
       }
     }
 

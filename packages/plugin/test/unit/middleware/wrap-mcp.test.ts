@@ -257,6 +257,82 @@ describe('installOverrideAuth', () => {
     expect(result['posts']).toEqual({ find: true })
   })
 
+  it('WIDENS a full grant when the operator enables a new collection', async () => {
+    // A full grant means "everything the operator has enabled" — a standing
+    // instruction, not a snapshot. Resolving it against the stored capabilities
+    // would freeze it, so adding a collection would never reach a connector
+    // already paired with Claude.ai; only a full re-authorization would.
+    const opts = {
+      collections: { posts: { enabled: true }, products: { enabled: true } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    // Token issued back when only `posts` existed.
+    const req = makeTokenReq(
+      makeAccessTokenDoc({
+        scope: '',
+        capabilities: { posts: { find: true, create: true, update: true, delete: true } },
+      }),
+    )
+    const result = (await opts.overrideAuth!(req as never, vi.fn())) as Record<string, unknown>
+
+    expect(result['products']).toEqual({ find: true, create: true, update: true, delete: true })
+    expect(result['posts']).toEqual({ find: true, create: true, update: true, delete: true })
+  })
+
+  it('narrows a full grant when the operator disables a collection', async () => {
+    const opts = {
+      collections: { posts: { enabled: true } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const req = makeTokenReq(
+      makeAccessTokenDoc({
+        scope: '',
+        capabilities: { posts: { find: true }, secrets: { find: true } },
+      }),
+    )
+    const result = (await opts.overrideAuth!(req as never, vi.fn())) as Record<string, unknown>
+
+    expect(result['secrets']).toBeUndefined()
+  })
+
+  it('treats a 0.5.0 full grant and a legacy one identically', async () => {
+    // Legacy rows store {} and new ones store the snapshot; both carry an empty
+    // scope, and the scope is what decides. They must not diverge in authority.
+    const opts = {
+      collections: { posts: { enabled: true } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const legacy = (await opts.overrideAuth!(
+      makeTokenReq(makeAccessTokenDoc({ scope: '', capabilities: {} })) as never,
+      vi.fn(),
+    )) as Record<string, unknown>
+    const modern = (await opts.overrideAuth!(
+      makeTokenReq(makeAccessTokenDoc({ scope: '', capabilities: { posts: { find: true } } })) as never,
+      vi.fn(),
+    )) as Record<string, unknown>
+
+    expect(modern['posts']).toEqual(legacy['posts'])
+  })
+
+  it('does NOT widen a narrowed grant when a new collection is enabled', async () => {
+    // The other half of the rule: a scope names a fixed set, so it only shrinks.
+    const opts = {
+      collections: { posts: { enabled: true }, products: { enabled: true } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const req = makeTokenReq(
+      makeAccessTokenDoc({ scope: 'posts:read', capabilities: { posts: { find: true } } }),
+    )
+    const result = (await opts.overrideAuth!(req as never, vi.fn())) as Record<string, unknown>
+
+    expect(result['posts']).toEqual({ find: true })
+    expect(result['products']).toBeUndefined()
+  })
+
   it('fails closed on a contradictory row: no stored capabilities but a non-empty scope', async () => {
     // No issuance path can produce this — a valid scope always yields at least
     // one capability and an invalid one is refused at the token endpoint — so

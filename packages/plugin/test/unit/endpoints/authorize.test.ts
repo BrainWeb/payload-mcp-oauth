@@ -256,3 +256,48 @@ describe('makeAuthorizeHandler — malformed client row', () => {
     expect(((await res.json()) as Record<string, unknown>)['error']).toBe('invalid_redirect_uri')
   })
 })
+
+describe('makeAuthorizeHandler — RFC 9207 iss on error responses', () => {
+  const ISSUER = 'https://cms.example.com'
+
+  it('includes iss on an invalid_scope error redirect', async () => {
+    // RFC 9207 §2 requires iss on ALL authorization responses, errors included.
+    // We advertise authorization_response_iss_parameter_supported, so §2.4 says
+    // a client MUST reject a response without it — omitting it here would turn
+    // an ordinary invalid_scope into a protocol violation at the client.
+    const res = await makeAuthorizeHandler({ mcpPluginOptions: MCP_OPTIONS, issuer: ISSUER })(
+      makeReq({ ...VALID_QUERY, scope: 'unknown:read' }, { id: 'user-1' }) as never,
+    )
+    const url = new URL(res.headers.get('Location') ?? '')
+    expect(url.searchParams.get('error')).toBe('invalid_scope')
+    expect(url.searchParams.get('iss')).toBe(ISSUER)
+  })
+
+  it('includes iss on a bad code_challenge error redirect', async () => {
+    const res = await makeAuthorizeHandler({ issuer: ISSUER })(
+      makeReq({ ...VALID_QUERY, code_challenge: 'too-short' }, { id: 'user-1' }) as never,
+    )
+    const url = new URL(res.headers.get('Location') ?? '')
+    expect(url.searchParams.get('error')).toBe('invalid_request')
+    expect(url.searchParams.get('iss')).toBe(ISSUER)
+  })
+
+  it('preserves state alongside iss', async () => {
+    const res = await makeAuthorizeHandler({ issuer: ISSUER })(
+      makeReq({ ...VALID_QUERY, code_challenge_method: 'plain' }, { id: 'user-1' }) as never,
+    )
+    const url = new URL(res.headers.get('Location') ?? '')
+    expect(url.searchParams.get('state')).toBe(VALID_QUERY.state)
+    expect(url.searchParams.get('iss')).toBe(ISSUER)
+  })
+
+  it('omits iss when no issuer is configured, rather than emitting an empty one', () => {
+    // Direct construction without an issuer must not produce `iss=`.
+    return makeAuthorizeHandler({})(
+      makeReq({ ...VALID_QUERY, code_challenge: 'bad' }, { id: 'user-1' }) as never,
+    ).then((res) => {
+      const url = new URL(res.headers.get('Location') ?? '')
+      expect(url.searchParams.has('iss')).toBe(false)
+    })
+  })
+})

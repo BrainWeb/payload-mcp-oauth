@@ -63,14 +63,24 @@ function resolveConfig(options: PayloadMcpOAuthConfig): ResolvedConfig {
   // machine, so there is no transport to intercept; this is the same allowance
   // the Dynamic Client Registration redirect_uri validator already made, now
   // sharing one definition with it.
-  if (
-    process.env['NODE_ENV'] === 'production' &&
-    issuerUrl.protocol !== 'https:' &&
-    !isLoopbackUrl(issuerUrl)
-  ) {
-    throw new PayloadMcpOAuthError(
-      'INSECURE_ISSUER',
-      `payloadMcpOAuth: issuer must use https:// in production, got "${issuer}"`,
+  if (process.env['NODE_ENV'] === 'production' && issuerUrl.protocol !== 'https:') {
+    if (!isLoopbackUrl(issuerUrl)) {
+      throw new PayloadMcpOAuthError(
+        'INSECURE_ISSUER',
+        `payloadMcpOAuth: issuer must use https:// in production, got "${issuer}"`,
+      )
+    }
+    // The exemption keeps `next build` working locally, but it also removes the
+    // boot error that used to catch a real deployment whose SERVER_URL was never
+    // set — many starters fall back to http://localhost:3000, and the app would
+    // then publish an unreachable issuer in its discovery documents, which is far
+    // harder to diagnose than a boot failure. Warn loudly so that case still has
+    // a signal, without reintroducing the friction this exemption exists to fix.
+    console.warn(
+      `[payloadMcpOAuth] Booting with the loopback issuer "${issuer}" while NODE_ENV=production. ` +
+        `That is expected for a local \`next build\`/\`next start\`. If this IS a deployment, the ` +
+        `OAuth discovery documents will advertise "${issuer}", which clients cannot reach — set ` +
+        `your public https:// URL (e.g. NEXT_PUBLIC_SERVER_URL) and restart.`,
     )
   }
 
@@ -384,6 +394,7 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
           consentPath: `${apiBase}/oauth/consent`,
           authorizePath: `${apiBase}/oauth/authorize`,
           mcpPluginOptions: resolved.mcpPluginOptions,
+          issuer: resolved.issuer,
         }),
       ),
     },

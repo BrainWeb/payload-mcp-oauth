@@ -80,9 +80,14 @@ async function handleAuthCode(
   // written out in full. Storing `{}` there, as versions up to 0.4.0 did, left
   // every such token claiming zero capabilities in the database while requests
   // succeeded with full access via a fallback in `overrideAuth`; the two paths
-  // disagreed and only the fallback was right. The snapshot is a record, not a
-  // ceiling: `overrideAuth` intersects it with the live config on every request,
-  // so an operator disabling a collection still narrows existing tokens at once.
+  // disagreed and only the fallback was right.
+  //
+  // This snapshot is a RECORD of what the grant meant at consent time, for
+  // audit — it is not what authorises the token. A full grant is a standing
+  // instruction ("everything the operator has enabled"), so `overrideAuth`
+  // re-resolves it live on every request; using this snapshot as a ceiling
+  // instead would mean a newly enabled collection never reached an existing
+  // connection. The empty `scope` on the row is what marks it as a full grant.
   //
   // An invalid scope is rejected outright rather than stored — e.g. the operator
   // disabled a collection between authorization and redemption.

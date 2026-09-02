@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { buildPlugin } from '../../../src/plugin.js'
 import { PayloadMcpOAuthError } from '../../../src/types.js'
 import type { PayloadMcpOAuthConfig } from '../../../src/types.js'
@@ -68,6 +68,36 @@ describe('buildPlugin — production hardening', () => {
     withEnv({ NODE_ENV: 'production' }, () => {
       expect(() => buildPlugin(makeConfig(), makeOptions({ issuer: 'https://cms.example.com' }))).not.toThrow()
     })
+  })
+
+  it('warns when booting in production on a loopback issuer', () => {
+    // The exemption removes a boot error that used to catch a deployment with an
+    // unset SERVER_URL (starters fall back to http://localhost:3000). Such an app
+    // would publish an unreachable issuer in its discovery documents — harder to
+    // diagnose than a boot failure — so the case keeps a signal.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      withEnv({ NODE_ENV: 'production' }, () => {
+        buildPlugin(makeConfig(), makeOptions({ issuer: 'http://localhost:3000' }))
+      })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('http://localhost:3000'))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('IS a deployment'))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('does not warn for an https issuer in production', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      withEnv({ NODE_ENV: 'production' }, () => {
+        buildPlugin(makeConfig(), makeOptions({ issuer: 'https://cms.example.com' }))
+      })
+      const loopbackWarnings = warn.mock.calls.filter((c) => String(c[0]).includes('loopback issuer'))
+      expect(loopbackWarnings).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('allows an http://localhost issuer in production (#71 — local `next build`)', () => {

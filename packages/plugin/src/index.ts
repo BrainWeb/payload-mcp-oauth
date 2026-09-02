@@ -1,5 +1,4 @@
 import type { Plugin } from 'payload'
-import { definePlugin } from 'payload'
 import type { PayloadMcpOAuthConfig } from './types.js'
 import { buildPlugin, isPluginDisabled } from './plugin.js'
 import { installOverrideAuth } from './middleware/wrap-mcp.js'
@@ -10,21 +9,6 @@ import { installOverrideAuth } from './middleware/wrap-mcp.js'
  * `mcpPluginOptions` at boot, so it would be inconsistent not to offer it.
  */
 export const PLUGIN_SLUG = 'plugin-mcp-oauth'
-
-// `definePlugin` supplies slug + order and exposes the caller's options on the
-// returned function as `.options`. It cannot own the whole factory: the plugin
-// function it builds runs during config build, which is far too late for
-// `installOverrideAuth` (see the note in payloadMcpOAuth below).
-const definedPlugin = definePlugin<Record<string, unknown>>({
-  slug: PLUGIN_SLUG,
-  order: 20,
-  plugin: (args) => {
-    // Drop the two keys definePlugin injects; everything else is our options.
-    const { config, plugins, ...options } = args
-    void plugins
-    return buildPlugin(config, options as unknown as PayloadMcpOAuthConfig)
-  },
-})
 
 /**
  * Typed cross-plugin discovery: a plugin authored with `definePlugin` receives a
@@ -76,9 +60,19 @@ export function payloadMcpOAuth(options: PayloadMcpOAuthConfig): Plugin {
     installOverrideAuth(options.mcpPluginOptions, options.userCollection ?? 'users')
   }
 
-  // mcpPlugin uses definePlugin with order:10; ours is 20, so we run after it.
-  // `definePlugin` spreads our options into a fresh object for the plugin call,
-  // but `mcpPluginOptions` is copied by reference, so the identity the OAuth
-  // wiring depends on is preserved.
-  return definedPlugin(options as unknown as Record<string, unknown>)
+  // `slug`, `order` and `options` are set by hand rather than via Payload's
+  // `definePlugin`. That helper only exists from payload 3.83.0, and our peer
+  // range is ^3.0.0 — importing it would break every consumer below that with a
+  // module-load error (`does not provide an export named 'definePlugin'` on ESM,
+  // `definePlugin is not a function` on CJS). It is also still marked
+  // @experimental upstream. Setting the three properties directly produces the
+  // same plugin function with no version floor, and keeps `options` as the exact
+  // object the caller passed rather than definePlugin's spread copy.
+  //
+  // mcpPlugin runs at order 10; ours is 20, so we run after it.
+  const fn: Plugin = (incomingConfig) => buildPlugin(incomingConfig, options)
+  fn.slug = PLUGIN_SLUG
+  fn.order = 20
+  fn.options = options as unknown as Record<string, unknown>
+  return fn
 }
