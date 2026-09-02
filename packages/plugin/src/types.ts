@@ -27,7 +27,7 @@ export interface PayloadMcpOAuthConfig {
    * ```
    *
    * If you pass a different object, `overrideAuth` is installed on an object the
-   * MCP handler never sees. Since 0.4.1 that is detected at boot and throws
+   * MCP handler never sees. Since 0.5.0 that is detected at boot and throws
    * `MCP_OPTIONS_NOT_SHARED` — previously it failed silently at runtime, with
    * OAuth tokens 401ing while the API-key path kept working.
    */
@@ -87,7 +87,7 @@ export interface PayloadMcpOAuthConfig {
    * picked up automatically. Set this only if your sign-in page lives outside
    * the admin panel entirely.
    *
-   * Until 0.4.1 this was hardcoded to `/admin/login`, so an app with a custom
+   * Until 0.5.0 this was hardcoded to `/admin/login`, so an app with a custom
    * admin route sent users to a 404 in the middle of the OAuth flow.
    */
   loginPath?: string
