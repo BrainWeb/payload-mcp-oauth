@@ -420,3 +420,68 @@ describe('buildPlugin — login redirect honours the app routes', () => {
     expect(decodeURIComponent(res.headers.get('Location') ?? '')).toContain('/cms-api/oauth/authorize')
   })
 })
+
+describe('buildPlugin — does not mutate the incoming config (#50)', () => {
+  it('leaves the input endpoint objects untouched', () => {
+    const originalHandler = async () => new Response('ok')
+    const inputEndpoint = { path: '/mcp', method: 'post' as const, handler: originalHandler }
+    const config = makeConfig([inputEndpoint])
+
+    buildPlugin(config, makeOptions())
+
+    // The returned config wraps the handler; the object we were given must not.
+    expect(inputEndpoint.handler).toBe(originalHandler)
+  })
+
+  it('returns a NEW endpoint object carrying the wrapped handler', () => {
+    const originalHandler = async () => new Response('ok')
+    const inputEndpoint = { path: '/mcp', method: 'post' as const, handler: originalHandler }
+
+    const result = buildPlugin(makeConfig([inputEndpoint]), makeOptions())
+    const returned = (result.endpoints ?? []).find((e) => e.path === '/mcp')
+
+    expect(returned).toBeDefined()
+    expect(returned).not.toBe(inputEndpoint)
+    expect(returned!.handler).not.toBe(originalHandler)
+    expect(returned!.method).toBe('post')
+  })
+
+  it('passes non-MCP endpoints through by reference, unwrapped', () => {
+    const otherHandler = async () => new Response('other')
+    const other = { path: '/custom', method: 'get' as const, handler: otherHandler }
+    const config = makeConfig([MCP_ENDPOINT, other])
+
+    const result = buildPlugin(config, makeOptions())
+    const returned = (result.endpoints ?? []).find((e) => e.path === '/custom')
+
+    expect(returned).toBe(other)
+    expect(returned!.handler).toBe(otherHandler)
+  })
+
+  it('does not mutate the incoming endpoints array', () => {
+    const config = makeConfig()
+    const before = [...(config.endpoints ?? [])]
+    buildPlugin(config, makeOptions())
+    expect(config.endpoints).toEqual(before)
+  })
+
+  it('is idempotent: building twice from the same config wraps once, not twice', () => {
+    // The old in-place assignment stacked a wrapper on every build.
+    const originalHandler = async () => new Response('ok')
+    const inputEndpoint = { path: '/mcp', method: 'post' as const, handler: originalHandler }
+    const config = makeConfig([inputEndpoint])
+
+    const first = buildPlugin(config, makeOptions())
+    const second = buildPlugin(config, makeOptions())
+
+    const firstHandler = (first.endpoints ?? []).find((e) => e.path === '/mcp')!.handler
+    const secondHandler = (second.endpoints ?? []).find((e) => e.path === '/mcp')!.handler
+    // Each build wraps the SAME original handler, never a previous wrapper.
+    expect(inputEndpoint.handler).toBe(originalHandler)
+    expect(firstHandler).not.toBe(secondHandler)
+  })
+
+  it('still throws PLUGIN_ORDER when no /mcp endpoint is present', () => {
+    expect(() => buildPlugin(makeConfig([]), makeOptions())).toThrow(PayloadMcpOAuthError)
+  })
+})

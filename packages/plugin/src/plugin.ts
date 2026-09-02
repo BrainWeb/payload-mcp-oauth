@@ -178,17 +178,18 @@ function oauthCollections(adminAccess: Access): CollectionConfig[] {
   ]
 }
 
-function detectMcpEndpoints(config: Config): Endpoint[] {
-  const endpoints = config.endpoints ?? []
-  const mcp = endpoints.filter((e) => e.path === '/mcp' || e.path === '/api/mcp')
-  if (mcp.length === 0) {
-    throw new PayloadMcpOAuthError(
-      'PLUGIN_ORDER',
-      'payloadMcpOAuth must be registered AFTER mcpPlugin() in the plugins array. ' +
-        'No /mcp endpoint found in incomingConfig — ensure mcpPlugin() runs first.',
-    )
-  }
-  return mcp
+/** The endpoint `@payloadcms/plugin-mcp` registers, by path. */
+function isMcpEndpoint(endpoint: Endpoint): boolean {
+  return endpoint.path === '/mcp' || endpoint.path === '/api/mcp'
+}
+
+function assertMcpPluginRanFirst(config: Config): void {
+  if ((config.endpoints ?? []).some(isMcpEndpoint)) return
+  throw new PayloadMcpOAuthError(
+    'PLUGIN_ORDER',
+    'payloadMcpOAuth must be registered AFTER mcpPlugin() in the plugins array. ' +
+      'No /mcp endpoint found in incomingConfig — ensure mcpPlugin() runs first.',
+  )
 }
 
 function warnIfVersionUntested(): void {
@@ -235,7 +236,7 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
   }
 
   const resolved = resolveConfig(options)
-  const mcpEndpoints = detectMcpEndpoints(incomingConfig)
+  assertMcpPluginRanFirst(incomingConfig)
   warnIfVersionUntested()
 
   // T5.4: wrap MCP endpoint handlers to convert OAuthInvalidTokenError → 401
@@ -243,6 +244,12 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
   // Pass the canonical full pathname (e.g. /api/mcp) so the wrapper can patch
   // req.url after a Next.js middleware rewrite, otherwise the downstream
   // mcp-handler URL match (url.pathname === streamableHttpEndpoint) fails.
+  //
+  // Derive NEW endpoint objects rather than reassigning `handler` on the ones
+  // Payload handed us (#50). The returned config used to share those objects
+  // with `incomingConfig`, so building the config mutated its own input —
+  // against the "never mutate incoming config" rule in Payload's plugin docs,
+  // and not idempotent: wrapping the same object twice would stack wrappers.
   const apiBase = (incomingConfig.routes?.api ?? '/api').replace(/\/$/, '')
 
   // Both the admin mount point and the login route within it are configurable,
@@ -253,14 +260,17 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
   const adminBase = (incomingConfig.routes?.admin ?? '/admin').replace(/\/$/, '')
   const loginRoute = incomingConfig.admin?.routes?.login ?? '/login'
   const loginPath = options.loginPath ?? `${adminBase}${loginRoute}`
-  for (const endpoint of mcpEndpoints) {
-    if (typeof endpoint.handler === 'function') {
-      const endpointPath = endpoint.path.startsWith('/api/')
-        ? endpoint.path
-        : `${apiBase}${endpoint.path.startsWith('/') ? endpoint.path : `/${endpoint.path}`}`
-      endpoint.handler = wrapMcpEndpointHandler(endpoint.handler, resolved.issuer, endpointPath)
+
+  const wrappedEndpoints = (incomingConfig.endpoints ?? []).map((endpoint) => {
+    if (!isMcpEndpoint(endpoint) || typeof endpoint.handler !== 'function') return endpoint
+    const endpointPath = endpoint.path.startsWith('/api/')
+      ? endpoint.path
+      : `${apiBase}${endpoint.path.startsWith('/') ? endpoint.path : `/${endpoint.path}`}`
+    return {
+      ...endpoint,
+      handler: wrapMcpEndpointHandler(endpoint.handler, resolved.issuer, endpointPath),
     }
-  }
+  })
 
   // T5.5: build rate limiters
   const rateLimits = createRateLimitStore(resolved.rateLimits)
@@ -351,6 +361,6 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
   return {
     ...incomingConfig,
     collections,
-    endpoints: [...(incomingConfig.endpoints ?? []), ...oauthEndpoints],
+    endpoints: [...wrappedEndpoints, ...oauthEndpoints],
   }
 }
