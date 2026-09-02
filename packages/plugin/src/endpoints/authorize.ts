@@ -150,7 +150,7 @@ export function makeAuthorizeHandler(
     // Validate scope against operator-enabled capabilities (RFC 6749 §4.1.2.1)
     if (scope && mcpPluginOptions) {
       const scopeResult = scopeToCapabilities(scope, mcpPluginOptions)
-      if (!scopeResult.valid) {
+      if (scopeResult.kind === 'invalid') {
         return errorRedirect(redirectUri, 'invalid_scope', `Unknown or unsupported scope: ${scopeResult.invalidScopes.join(' ')}`, state)
       }
     }

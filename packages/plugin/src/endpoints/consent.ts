@@ -63,7 +63,7 @@ export function makeConsentHandler(authCodeTtlSeconds = 300, issuer = '', mcpPlu
       // Re-validate scope at consent time to prevent tampering with the hidden scope field
       if (scope && mcpPluginOptions) {
         const scopeResult = scopeToCapabilities(scope, mcpPluginOptions)
-        if (!scopeResult.valid) {
+        if (scopeResult.kind === 'invalid') {
           return oauthErrorResponse(400, 'invalid_scope', `Unknown or unsupported scope: ${scopeResult.invalidScopes.join(' ')}`)
         }
       }

@@ -2,7 +2,7 @@ import type { MCPAccessSettings, MCPPluginConfig } from '@payloadcms/plugin-mcp'
 import type { PayloadRequest, TypedUser } from 'payload'
 import { UnauthorizedError } from 'payload'
 import { validateAccessToken } from '../lib/validate.js'
-import { buildFullCapabilities } from '../lib/scope.js'
+import { buildFullCapabilities, intersectCapabilities } from '../lib/scope.js'
 import { OAUTH_PRM_METADATA_PATH } from '../lib/paths.js'
 import { OAuthInvalidTokenError } from '../types.js'
 
@@ -60,10 +60,34 @@ export function installOverrideAuth(mcpPluginOptions: MCPPluginConfig, userColle
 
     req.payload.logger?.info(`[pmoauth] overrideAuth: success, returning MCPAccessSettings`)
 
-    // Use stored token capabilities if explicitly set; otherwise derive from plugin config.
-    // Tokens issued by this plugin in v1 always store {} — the plugin config is authoritative.
-    const capabilities =
-      Object.keys(ctx.capabilities).length > 0 ? ctx.capabilities : buildFullCapabilities(mcpPluginOptions)
+    // The live ceiling: what the operator has enabled RIGHT NOW. A token can
+    // never exceed it, however it was granted.
+    const allowed = buildFullCapabilities(mcpPluginOptions)
+    const hasStoredGrant = Object.keys(ctx.capabilities).length > 0
+
+    let capabilities: Record<string, unknown>
+    if (hasStoredGrant) {
+      // Narrow the stored grant to the live config. Previously the stored set was
+      // used verbatim, so a token issued while `posts.delete` was enabled kept
+      // deleting posts for its full lifetime after the operator turned that off.
+      capabilities = intersectCapabilities(ctx.capabilities, allowed)
+    } else if (ctx.scope.trim() === '') {
+      // Legacy full grant: tokens issued up to 0.4.0 stored `{}` for an omitted
+      // scope. The empty SCOPE (not the empty capability set) is what identifies
+      // them — that distinction is the bug this branch exists to survive. They
+      // resolve to the full operator grant, exactly as they did before.
+      capabilities = allowed
+    } else {
+      // Empty stored grant against a non-empty scope is a contradiction no
+      // issuance path can produce: a valid scope always yields at least one
+      // capability, and an invalid one is refused at the token endpoint. So the
+      // row is corrupt. Fail closed with a 401 rather than guessing — that also
+      // prompts the client to re-authorize, which repairs the record.
+      req.payload.logger?.error(
+        `[pmoauth] overrideAuth: token ${ctx.tokenId} stores no capabilities but requests scope "${ctx.scope}" — refusing`,
+      )
+      throw new OAuthInvalidTokenError()
+    }
 
     return {
       ...capabilities,

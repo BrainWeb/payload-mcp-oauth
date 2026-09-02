@@ -133,7 +133,7 @@ describe('installOverrideAuth', () => {
     expect(getDefault).not.toHaveBeenCalled()
   })
 
-  it('returns MCPAccessSettings with capabilities derived from mcpPluginOptions when token stores none', async () => {
+  it('resolves a legacy empty-capability token with an empty scope to the full operator grant', async () => {
     const opts = {
       collections: {
         users: { enabled: { find: true, create: false, update: true, delete: false } },
@@ -148,7 +148,10 @@ describe('installOverrideAuth', () => {
       tokenType: 'access',
       userId: 'user-1',
       clientId: 'client-1',
-      scope: 'mcp',
+      // Tokens issued up to 0.4.0 stored `{}` with an omitted scope (#75). The
+      // empty SCOPE is what identifies them as full grants — not the empty
+      // capability set, which on its own is ambiguous.
+      scope: '',
       capabilities: {},
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
       revokedAt: null,
@@ -171,6 +174,114 @@ describe('installOverrideAuth', () => {
     expect(getDefault).not.toHaveBeenCalled()
   })
 
+  function makeTokenReq(tokenDoc: Record<string, unknown>) {
+    const payload = {
+      find: vi.fn().mockResolvedValue({ docs: [tokenDoc] }),
+      findByID: vi.fn().mockResolvedValue({ id: 'user-1', email: 'a@b.com' }),
+      update: vi.fn().mockResolvedValue({}),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }
+    return {
+      headers: { get: vi.fn().mockReturnValue('Bearer pmoauth_at_sometoken12345678901234567890123') },
+      payload,
+    }
+  }
+
+  function makeAccessTokenDoc(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'tok-caps',
+      tokenHash: 'anyhash',
+      tokenType: 'access',
+      userId: 'user-1',
+      clientId: 'client-1',
+      scope: 'posts:read',
+      capabilities: { posts: { find: true } },
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      revokedAt: null,
+      ...overrides,
+    }
+  }
+
+  it('honours a stored narrowed grant without widening it to the full set', async () => {
+    const opts = {
+      collections: { posts: { enabled: true }, media: { enabled: true } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const req = makeTokenReq(makeAccessTokenDoc())
+    const result = (await opts.overrideAuth!(req as never, vi.fn())) as Record<string, unknown>
+
+    expect(result['posts']).toEqual({ find: true })
+    // media was never granted, so it must not appear even though it is enabled.
+    expect(result['media']).toBeUndefined()
+  })
+
+  it('narrows a stored grant to the live config when the operator disables an operation', async () => {
+    // The privilege-retention case: the token was issued while posts:delete was
+    // enabled. The operator has since restricted posts to reads only, and that
+    // must take effect on the very next request — not when the token expires.
+    const opts = {
+      collections: { posts: { enabled: { find: true } as never } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const req = makeTokenReq(
+      makeAccessTokenDoc({ scope: 'posts:read posts:delete', capabilities: { posts: { find: true, delete: true } } }),
+    )
+    const result = (await opts.overrideAuth!(req as never, vi.fn())) as Record<string, unknown>
+
+    expect(result['posts']).toEqual({ find: true })
+  })
+
+  it('grants nothing when the operator has disabled every collection the token names', async () => {
+    const opts = { collections: {} } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const req = makeTokenReq(makeAccessTokenDoc())
+    const result = (await opts.overrideAuth!(req as never, vi.fn())) as Record<string, unknown>
+
+    // Authentication still succeeds — the user is real — but the grant is empty.
+    expect(result['user']).toBeDefined()
+    expect(result['posts']).toBeUndefined()
+  })
+
+  it('narrows a legacy full grant to the live config too', async () => {
+    const opts = {
+      collections: { posts: { enabled: { find: true } as never } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const req = makeTokenReq(makeAccessTokenDoc({ scope: '', capabilities: {} }))
+    const result = (await opts.overrideAuth!(req as never, vi.fn())) as Record<string, unknown>
+
+    expect(result['posts']).toEqual({ find: true })
+  })
+
+  it('fails closed on a contradictory row: no stored capabilities but a non-empty scope', async () => {
+    // No issuance path can produce this — a valid scope always yields at least
+    // one capability and an invalid one is refused at the token endpoint — so
+    // the row is corrupt. Refuse rather than guess; the 401 prompts the client
+    // to re-authorize, which rewrites the record correctly.
+    const opts = {
+      collections: { posts: { enabled: true } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const req = makeTokenReq(makeAccessTokenDoc({ scope: 'posts:read', capabilities: {} }))
+    await expect(opts.overrideAuth!(req as never, vi.fn())).rejects.toThrow(OAuthInvalidTokenError)
+  })
+
+  it('does not log the requested scope check as a silent widening', async () => {
+    const opts = {
+      collections: { posts: { enabled: true } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const req = makeTokenReq(makeAccessTokenDoc({ scope: 'posts:read', capabilities: {} }))
+    await expect(opts.overrideAuth!(req as never, vi.fn())).rejects.toThrow(OAuthInvalidTokenError)
+    expect(req.payload.logger.error).toHaveBeenCalledWith(expect.stringContaining('refusing'))
+  })
+
   it('sets user.collection and user._strategy on the returned user', async () => {
     const opts = {} as Parameters<typeof installOverrideAuth>[0]
     installOverrideAuth(opts, 'users')
@@ -181,7 +292,7 @@ describe('installOverrideAuth', () => {
       tokenType: 'access',
       userId: 'user-2',
       clientId: 'client-1',
-      scope: 'mcp',
+      scope: '',
       capabilities: {},
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
       revokedAt: null,
