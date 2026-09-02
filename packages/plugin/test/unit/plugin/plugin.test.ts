@@ -70,6 +70,42 @@ describe('buildPlugin — production hardening', () => {
     })
   })
 
+  it('allows an http://localhost issuer in production (#71 — local `next build`)', () => {
+    // `next build` sets NODE_ENV=production unconditionally, so this fired on a
+    // routine local production build with the standard dev server URL.
+    withEnv({ NODE_ENV: 'production' }, () => {
+      expect(() => buildPlugin(makeConfig(), makeOptions({ issuer: 'http://localhost:3000' }))).not.toThrow()
+    })
+  })
+
+  it('allows http://127.0.0.1 and http://[::1] issuers in production', () => {
+    withEnv({ NODE_ENV: 'production' }, () => {
+      expect(() => buildPlugin(makeConfig(), makeOptions({ issuer: 'http://127.0.0.1:3000' }))).not.toThrow()
+      expect(() => buildPlugin(makeConfig(), makeOptions({ issuer: 'http://[::1]:3000' }))).not.toThrow()
+    })
+  })
+
+  it('still rejects a non-loopback http issuer in production', () => {
+    withEnv({ NODE_ENV: 'production' }, () => {
+      expect(() => buildPlugin(makeConfig(), makeOptions({ issuer: 'http://cms.example.com' }))).toThrow(/https/i)
+      // A hostname that merely contains "localhost" is not loopback.
+      expect(() => buildPlugin(makeConfig(), makeOptions({ issuer: 'http://localhost.evil.com' }))).toThrow(/https/i)
+      expect(() => buildPlugin(makeConfig(), makeOptions({ issuer: 'http://notlocalhost' }))).toThrow(/https/i)
+    })
+  })
+
+  it('does NOT relax the pepper requirement for a loopback issuer', () => {
+    // The HTTPS exemption is about a transport that does not exist on loopback.
+    // The pepper protects data at rest, so it stays required — and the message
+    // has to name the local-build case, or #71's reporter just hits this wall
+    // instead of the previous one.
+    withEnv({ NODE_ENV: 'production', PMOAUTH_TOKEN_PEPPER: undefined }, () => {
+      expect(() =>
+        buildPlugin(makeConfig(), makeOptions({ issuer: 'http://localhost:3000' })),
+      ).toThrow(/next build/)
+    })
+  })
+
   it('throws MISSING_PEPPER when no pepper is set outside development/test', () => {
     withEnv({ NODE_ENV: 'production', PMOAUTH_TOKEN_PEPPER: undefined }, () => {
       expect(() => buildPlugin(makeConfig(), makeOptions())).toThrow(/PMOAUTH_TOKEN_PEPPER/)

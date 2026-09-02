@@ -176,6 +176,16 @@ In development a built-in insecure pepper is used if `PMOAUTH_TOKEN_PEPPER` is
 unset (with a warning). In `NODE_ENV=production` the plugin **throws on boot** if
 it is missing or shorter than 32 characters.
 
+> **Set `PMOAUTH_TOKEN_PEPPER` locally too.** `next build` and `next start` set
+> `NODE_ENV=production` whether or not you are deploying, so a local production
+> build hits the same boot check. Put the pepper in your local `.env` and
+> `pnpm build` works on your machine.
+>
+> A `http://localhost` (or `127.0.0.1` / `[::1]`) issuer is *exempt* from the
+> HTTPS requirement for exactly this reason — a loopback URL is not reachable off
+> your machine, so there is no transport to protect. Any other host still has to
+> be `https://` under `NODE_ENV=production`.
+
 > **Keep `serverURL` consistent.** The authorize/consent flow signs the user in
 > with a first-party Payload **session cookie**, so Payload's `serverURL` must be
 > the same public origin clients reach (the same value as `NEXT_PUBLIC_SERVER_URL`).

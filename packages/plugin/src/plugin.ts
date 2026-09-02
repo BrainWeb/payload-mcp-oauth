@@ -14,6 +14,7 @@ import { makeTokenHandler } from './endpoints/token.js'
 import { isOAuthAdmin } from './admin/is-admin.js'
 import { createRateLimitStore, rateLimitKey } from './middleware/rate-limit.js'
 import { wrapMcpEndpointHandler } from './middleware/wrap-mcp.js'
+import { isLoopbackUrl } from './lib/loopback.js'
 import { OAUTH_AS_METADATA_PATH, OAUTH_PRM_METADATA_PATH } from './lib/paths.js'
 import { PayloadMcpOAuthError } from './types.js'
 
@@ -52,7 +53,19 @@ function resolveConfig(options: PayloadMcpOAuthConfig): ResolvedConfig {
   }
   // In production the issuer (and every advertised OAuth endpoint) must be HTTPS:
   // auth codes and bearer tokens travel to/from these URLs.
-  if (process.env['NODE_ENV'] === 'production' && issuerUrl.protocol !== 'https:') {
+  //
+  // Loopback is exempt. `next build` and `next start` set NODE_ENV=production
+  // unconditionally, so this fired on a local production build — a routine
+  // pre-deploy check — and there was no way through it short of deploying first
+  // or removing the plugin (#71). A loopback issuer is not reachable off the
+  // machine, so there is no transport to intercept; this is the same allowance
+  // the Dynamic Client Registration redirect_uri validator already made, now
+  // sharing one definition with it.
+  if (
+    process.env['NODE_ENV'] === 'production' &&
+    issuerUrl.protocol !== 'https:' &&
+    !isLoopbackUrl(issuerUrl)
+  ) {
     throw new PayloadMcpOAuthError(
       'INSECURE_ISSUER',
       `payloadMcpOAuth: issuer must use https:// in production, got "${issuer}"`,
@@ -74,9 +87,19 @@ function resolveConfig(options: PayloadMcpOAuthConfig): ResolvedConfig {
   const nodeEnv = process.env['NODE_ENV']
   const isDevOrTest = nodeEnv === 'development' || nodeEnv === 'test'
   if ((!pepper || pepper.length < 32) && !isDevOrTest) {
+    // Deliberately NOT exempted for a loopback issuer, unlike the HTTPS check
+    // above. The pepper is what makes stored token hashes unforgeable, and the
+    // built-in dev fallback ships inside the published package — relaxing it
+    // would weaken data at rest, whereas the HTTPS exemption only concerns a
+    // transport that does not exist on loopback. A local `next build` reaches
+    // here too, so the message names that case rather than assuming a deploy.
     throw new PayloadMcpOAuthError(
       'MISSING_PEPPER',
-      'PMOAUTH_TOKEN_PEPPER must be set to a string of at least 32 characters (the insecure dev fallback is only used when NODE_ENV is "development" or "test")',
+      'PMOAUTH_TOKEN_PEPPER must be set to a string of at least 32 characters. ' +
+        'The insecure built-in fallback is only used when NODE_ENV is "development" or "test", ' +
+        'and `next build` / `next start` set NODE_ENV=production even for a local build — ' +
+        'so add PMOAUTH_TOKEN_PEPPER to your local .env as well as your deployment. ' +
+        'Generate one with: openssl rand -hex 32',
     )
   }
 

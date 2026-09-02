@@ -1,5 +1,6 @@
 import type { PayloadHandler } from 'payload'
 import { randomUUID } from 'crypto'
+import { isLoopbackUrl } from '../lib/loopback.js'
 import { oauthErrorResponse, jsonResponse, parseBody } from './helpers.js'
 
 export function makeRegisterHandler(): PayloadHandler {
@@ -45,11 +46,8 @@ export function makeRegisterHandler(): PayloadHandler {
       if (parsed.hash) {
         return oauthErrorResponse(400, 'invalid_redirect_uri', `redirect_uri must not contain a fragment: ${uri}`)
       }
-      // Allow loopback for local development over http (RFC 8252 §7.3): IPv4,
-      // hostname, and IPv6 [::1]. URL parsing reports the IPv6 host bracketed.
-      const isLocalhost =
-        parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]'
-      if (parsed.protocol !== 'https:' && !isLocalhost) {
+      // Allow loopback for local development over http (RFC 8252 §7.3).
+      if (parsed.protocol !== 'https:' && !isLoopbackUrl(parsed)) {
         return oauthErrorResponse(400, 'invalid_redirect_uri', `redirect_uri must use HTTPS: ${uri}`)
       }
       redirectUris.push(uri)
