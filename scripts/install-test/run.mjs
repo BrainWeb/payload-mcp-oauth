@@ -196,16 +196,29 @@ try {
     incAddErr ? `second boot failed — a "no such column: oauth_clients_id" here is the 0.3.2 regression:\n${incAddErr.slice(-1500)}` : '',
   )
 
-  // (a) production with a non-https issuer (appEnv issuer is http://localhost) must be refused.
+  // (a) production with a non-https, NON-LOOPBACK issuer must be refused.
   let prodHttpErr = ''
   await run('node', ['--import', 'tsx', '-e', bootProbe], {
     cwd: appDir,
-    env: { ...process.env, ...appEnv, NODE_ENV: 'production' },
+    env: { ...process.env, ...appEnv, NODE_ENV: 'production', NEXT_PUBLIC_SERVER_URL: 'http://cms.example.com' },
   }).catch((e) => (prodHttpErr = e.message))
   check(
-    'env: NODE_ENV=production with a non-https issuer refuses to boot',
+    'env: NODE_ENV=production with a non-https, non-loopback issuer refuses to boot',
     /https/i.test(prodHttpErr),
     prodHttpErr ? `boot failed but not for https:\n${prodHttpErr.slice(-1200)}` : 'expected a boot failure but it started',
+  )
+  // (a2) ...but a LOOPBACK http issuer must boot (#71). `next build` sets
+  // NODE_ENV=production whether or not you are deploying, so rejecting this made
+  // a local production build impossible. appEnv's issuer is http://localhost.
+  let prodLoopbackErr = ''
+  await run('node', ['--import', 'tsx', '-e', bootProbe], {
+    cwd: appDir,
+    env: { ...process.env, ...appEnv, NODE_ENV: 'production' },
+  }).catch((e) => (prodLoopbackErr = e.message))
+  check(
+    'env: NODE_ENV=production with an http://localhost issuer boots (#71 — local `next build`)',
+    !prodLoopbackErr,
+    prodLoopbackErr.slice(-1200),
   )
   // (b) production with an https issuer but no pepper must be refused (mentioning the pepper).
   let prodPepperErr = ''
