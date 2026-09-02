@@ -42,6 +42,33 @@ const VALID_QUERY = {
 }
 
 describe('makeAuthorizeHandler', () => {
+  it('sends an unauthenticated user to a custom login path', async () => {
+    const res = await makeAuthorizeHandler({ loginPath: '/staff/sign-in' })(
+      makeReq(VALID_QUERY, null) as never,
+    )
+    expect(res.status).toBe(302)
+    expect(res.headers.get('Location')).toContain('/staff/sign-in?redirect=')
+  })
+
+  it('returns the user to the authorize endpoint after login, preserving the query', async () => {
+    const req = makeReq(VALID_QUERY, null)
+    req.url = 'https://cms.example.com/api/oauth/authorize?response_type=code&client_id=client-1'
+    const res = await makeAuthorizeHandler()(req as never)
+    const location = res.headers.get('Location') ?? ''
+    const redirect = decodeURIComponent(location.split('redirect=')[1] ?? '')
+    // Path + search only — an absolute URL would break behind a tunnel whose
+    // public origin differs from the one Payload sees.
+    expect(redirect).toBe('/api/oauth/authorize?response_type=code&client_id=client-1')
+  })
+
+  it('falls back to the configured authorize path when req.url is unparseable', async () => {
+    const req = makeReq(VALID_QUERY, null)
+    req.url = undefined
+    const res = await makeAuthorizeHandler({ authorizePath: '/cms/oauth/authorize' })(req as never)
+    const location = res.headers.get('Location') ?? ''
+    expect(decodeURIComponent(location)).toContain('/cms/oauth/authorize')
+  })
+
   it('redirects unauthenticated users to login', async () => {
     const res = await makeAuthorizeHandler()(makeReq(VALID_QUERY, null) as never)
     expect(res.status).toBe(302)
@@ -158,7 +185,7 @@ describe('makeAuthorizeHandler', () => {
   })
 
   it('uses the configured consentPath as the form action', async () => {
-    const res = await makeAuthorizeHandler('/admin', undefined, '/cms/oauth/consent')(
+    const res = await makeAuthorizeHandler({ consentPath: '/cms/oauth/consent' })(
       makeReq(VALID_QUERY, { id: 'user-1' }) as never,
     )
     const html = await res.text()
@@ -167,7 +194,7 @@ describe('makeAuthorizeHandler', () => {
   })
 
   it('redirects with invalid_scope for an unknown scope token (scope enforcement active)', async () => {
-    const res = await makeAuthorizeHandler('/admin', undefined, '/api/oauth/consent', MCP_OPTIONS)(
+    const res = await makeAuthorizeHandler({ mcpPluginOptions: MCP_OPTIONS })(
       makeReq({ ...VALID_QUERY, scope: 'unknown:read' }, { id: 'user-1' }) as never,
     )
     expect(res.status).toBe(302)
@@ -175,7 +202,7 @@ describe('makeAuthorizeHandler', () => {
   })
 
   it('accepts a valid scope token and shows the per-scope note when enforcement is active', async () => {
-    const res = await makeAuthorizeHandler('/admin', undefined, '/api/oauth/consent', MCP_OPTIONS)(
+    const res = await makeAuthorizeHandler({ mcpPluginOptions: MCP_OPTIONS })(
       makeReq({ ...VALID_QUERY, scope: 'posts:read' }, { id: 'user-1' }) as never,
     )
     expect(res.status).toBe(200)
@@ -185,7 +212,7 @@ describe('makeAuthorizeHandler', () => {
   })
 
   it('accepts empty scope without scope validation and shows the full-grant note', async () => {
-    const res = await makeAuthorizeHandler('/admin', undefined, '/api/oauth/consent', MCP_OPTIONS)(
+    const res = await makeAuthorizeHandler({ mcpPluginOptions: MCP_OPTIONS })(
       makeReq({ ...VALID_QUERY, scope: undefined }, { id: 'user-1' }) as never,
     )
     expect(res.status).toBe(200)

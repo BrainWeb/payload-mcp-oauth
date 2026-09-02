@@ -78,6 +78,20 @@ export interface PayloadMcpOAuthConfig {
   adminAccess?: Access
 
   /**
+   * Where to send an unauthenticated user to sign in during the authorize flow,
+   * as an app-absolute path (e.g. `/staff/login`).
+   *
+   * Defaults to your Payload admin login route, read from the config —
+   * `routes.admin` joined with `admin.routes.login`, so customising either is
+   * picked up automatically. Set this only if your sign-in page lives outside
+   * the admin panel entirely.
+   *
+   * Until 0.4.1 this was hardcoded to `/admin/login`, so an app with a custom
+   * admin route sent users to a 404 in the middle of the OAuth flow.
+   */
+  loginPath?: string
+
+  /**
    * Lifetime of issued access tokens in seconds.
    *
    * Until 0.4.0 this value was resolved but never passed to the token endpoint,

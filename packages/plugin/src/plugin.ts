@@ -244,6 +244,15 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
   // req.url after a Next.js middleware rewrite, otherwise the downstream
   // mcp-handler URL match (url.pathname === streamableHttpEndpoint) fails.
   const apiBase = (incomingConfig.routes?.api ?? '/api').replace(/\/$/, '')
+
+  // Both the admin mount point and the login route within it are configurable,
+  // and the login redirect has to honour both. This used to pass a hardcoded
+  // '/admin', so an app that customised either sent users mid-flow to a URL
+  // that does not exist — with no way to override it. `routes.admin` may be '/',
+  // which the trailing-slash strip turns into '' so the join stays single-slashed.
+  const adminBase = (incomingConfig.routes?.admin ?? '/admin').replace(/\/$/, '')
+  const loginRoute = incomingConfig.admin?.routes?.login ?? '/login'
+  const loginPath = options.loginPath ?? `${adminBase}${loginRoute}`
   for (const endpoint of mcpEndpoints) {
     if (typeof endpoint.handler === 'function') {
       const endpointPath = endpoint.path.startsWith('/api/')
@@ -298,7 +307,15 @@ export function buildPlugin(incomingConfig: Config, options: PayloadMcpOAuthConf
     {
       path: '/oauth/authorize',
       method: 'get',
-      handler: withRateLimit(rateLimits.authorize, makeAuthorizeHandler('/admin', undefined, `${apiBase}/oauth/consent`, resolved.mcpPluginOptions)),
+      handler: withRateLimit(
+        rateLimits.authorize,
+        makeAuthorizeHandler({
+          loginPath,
+          consentPath: `${apiBase}/oauth/consent`,
+          authorizePath: `${apiBase}/oauth/authorize`,
+          mcpPluginOptions: resolved.mcpPluginOptions,
+        }),
+      ),
     },
     {
       path: '/oauth/consent',

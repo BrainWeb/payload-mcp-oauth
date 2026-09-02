@@ -311,6 +311,7 @@ because Skills are client-side it has no effect on the runtime connector agent.
 | `userCollection` | `string` | `'users'` | Collection holding user accounts. |
 | `disabled` | `boolean` | `false` | Turn OAuth off without uninstalling: no endpoints, no token wiring, `mcpPluginOptions` untouched (API-key MCP keeps working). Collections stay registered for schema consistency. Also auto-detected when `mcpPluginOptions.disabled` is set. |
 | `adminAccess` | `Access` | authenticated user in `userCollection` | Who may view/manage the OAuth collections in the admin. See below. |
+| `loginPath` | `string` | `routes.admin` + `admin.routes.login` | Where to send an unauthenticated user to sign in. Derived from your Payload config, so a custom admin or login route is picked up automatically. Set it only if sign-in lives outside the admin panel. |
 | `accessTokenTtlSeconds` | `number` | `3600` | Access-token lifetime. |
 | `refreshTokenTtlSeconds` | `number` | `86400` | Refresh-token lifetime. |
 | `authCodeTtlSeconds` | `number` | `300` | Authorization-code lifetime. |

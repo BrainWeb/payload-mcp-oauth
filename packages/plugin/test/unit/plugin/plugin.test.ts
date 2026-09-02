@@ -323,3 +323,100 @@ describe('payloadMcpOAuth — exported factory', () => {
     expect(result).toBeTruthy()
   })
 })
+
+const AUTHORIZE_CLIENT = {
+  id: 'client-doc-1',
+  clientId: 'client-1',
+  clientName: 'Test App',
+  redirectUris: [{ uri: 'https://example.com/cb' }],
+  isActive: true,
+}
+
+/** A fully valid /authorize request with NO session, so it reaches the login redirect. */
+function makeAuthorizeReq(overrides: Record<string, unknown> = {}) {
+  return {
+    method: 'GET',
+    query: {
+      response_type: 'code',
+      client_id: 'client-1',
+      redirect_uri: 'https://example.com/cb',
+      code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+      code_challenge_method: 'S256',
+    },
+    user: null,
+    url: 'https://cms.example.com/api/oauth/authorize?response_type=code&client_id=client-1',
+    headers: new Headers(),
+    payload: {
+      find: async () => ({ docs: [AUTHORIZE_CLIENT] }),
+      create: async () => ({ id: 'nonce-doc-1' }),
+    },
+    ...overrides,
+  }
+}
+
+describe('buildPlugin — login redirect honours the app routes', () => {
+  /** Drives the registered /oauth/authorize endpoint with no session. */
+  async function authorizeUnauthenticated(config: import('payload').Config, options = makeOptions()) {
+    const result = buildPlugin(config, options)
+    const endpoint = (result.endpoints ?? []).find(
+      (e) => e.path === '/oauth/authorize' && e.method === 'get',
+    )
+    expect(endpoint).toBeDefined()
+    return endpoint!.handler(makeAuthorizeReq() as never) as Promise<Response>
+  }
+
+  it('uses the default /admin/login when no routes are configured', async () => {
+    const res = await authorizeUnauthenticated(makeConfig())
+    expect(res.headers.get('Location')).toContain('/admin/login?redirect=')
+  })
+
+  it('honours a custom routes.admin', async () => {
+    // Previously hardcoded to '/admin', so a custom admin route sent users
+    // mid-flow to a URL that does not exist.
+    const config = { ...makeConfig(), routes: { admin: '/cms' } } as import('payload').Config
+    const res = await authorizeUnauthenticated(config)
+    expect(res.headers.get('Location')).toContain('/cms/login?redirect=')
+  })
+
+  it('honours a custom admin.routes.login', async () => {
+    const config = {
+      ...makeConfig(),
+      admin: { routes: { login: '/sign-in' } },
+    } as import('payload').Config
+    const res = await authorizeUnauthenticated(config)
+    expect(res.headers.get('Location')).toContain('/admin/sign-in?redirect=')
+  })
+
+  it('combines a custom admin route with a custom login route', async () => {
+    const config = {
+      ...makeConfig(),
+      routes: { admin: '/cms' },
+      admin: { routes: { login: '/sign-in' } },
+    } as import('payload').Config
+    const res = await authorizeUnauthenticated(config)
+    expect(res.headers.get('Location')).toContain('/cms/sign-in?redirect=')
+  })
+
+  it('does not double the slash when the admin panel is mounted at /', async () => {
+    const config = { ...makeConfig(), routes: { admin: '/' } } as import('payload').Config
+    const res = await authorizeUnauthenticated(config)
+    const location = res.headers.get('Location') ?? ''
+    expect(location.startsWith('/login?redirect=')).toBe(true)
+  })
+
+  it('lets an explicit loginPath override the derived one', async () => {
+    const config = { ...makeConfig(), routes: { admin: '/cms' } } as import('payload').Config
+    const res = await authorizeUnauthenticated(config, makeOptions({ loginPath: '/portal/login' }))
+    expect(res.headers.get('Location')).toContain('/portal/login?redirect=')
+  })
+
+  it('builds the post-login return path from routes.api', async () => {
+    const config = { ...makeConfig(), routes: { api: '/cms-api' } } as import('payload').Config
+    const result = buildPlugin(config, makeOptions())
+    const endpoint = (result.endpoints ?? []).find(
+      (e) => e.path === '/oauth/authorize' && e.method === 'get',
+    )
+    const res = (await endpoint!.handler(makeAuthorizeReq({ url: undefined }) as never)) as Response
+    expect(decodeURIComponent(res.headers.get('Location') ?? '')).toContain('/cms-api/oauth/authorize')
+  })
+})

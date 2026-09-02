@@ -93,12 +93,38 @@ function errorRedirect(redirectUri: string | null, error: string, description: s
   return redirectResponse(url.toString())
 }
 
-export function makeAuthorizeHandler(
-  adminPath = '/admin',
-  loginPath?: string,
-  consentPath = '/api/oauth/consent',
-  mcpPluginOptions?: MCPPluginConfig,
-): PayloadHandler {
+export interface AuthorizeHandlerOptions {
+  /**
+   * Where to send an unauthenticated user to sign in, as an app-absolute path.
+   * Built by the caller from `routes.admin` + `admin.routes.login`, both of
+   * which an app may customise.
+   * @default '/admin/login'
+   */
+  loginPath?: string
+  /** Where the consent form POSTs. @default '/api/oauth/consent' */
+  consentPath?: string
+  /**
+   * This endpoint's own path, used to rebuild the post-login return URL when
+   * `req.url` cannot be parsed. @default '/api/oauth/authorize'
+   */
+  authorizePath?: string
+  /** Enables scope validation and the narrowed-grant consent copy. */
+  mcpPluginOptions?: MCPPluginConfig
+}
+
+/**
+ * Named options rather than positional arguments on purpose: the previous
+ * signature led the caller to pass `('/admin', undefined, ...)`, which reads as
+ * a deliberate choice but silently ignored an app's configured admin route.
+ */
+export function makeAuthorizeHandler(options: AuthorizeHandlerOptions = {}): PayloadHandler {
+  const {
+    loginPath = '/admin/login',
+    consentPath = '/api/oauth/consent',
+    authorizePath = '/api/oauth/authorize',
+    mcpPluginOptions,
+  } = options
+
   return async (req) => {
     const q = req.query as Record<string, string | undefined>
     const responseType = q['response_type']
@@ -158,17 +184,16 @@ export function makeAuthorizeHandler(
     // state is RECOMMENDED but optional per OAuth 2.1 — do not reject absent state
     const user = req.user
     if (!user) {
-      const resolvedLogin = loginPath ?? `${adminPath}/login`
       // Use path+search only — avoids localhost vs tunnel protocol mismatch
-      let returnPath = '/api/oauth/authorize'
+      let returnPath = authorizePath
       try {
         const u = new URL(req.url ?? '')
         returnPath = u.pathname + u.search
       } catch {
         // req.url was a relative path already
-        returnPath = req.url ?? '/api/oauth/authorize'
+        returnPath = req.url ?? authorizePath
       }
-      return redirectResponse(`${resolvedLogin}?redirect=${encodeURIComponent(returnPath)}`)
+      return redirectResponse(`${loginPath}?redirect=${encodeURIComponent(returnPath)}`)
     }
 
     const clientName = String(client['clientName'] ?? clientId)
