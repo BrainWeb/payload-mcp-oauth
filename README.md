@@ -309,12 +309,47 @@ because Skills are client-side it has no effect on the runtime connector agent.
 | `mcpPluginOptions` | `MCPPluginConfig` | — (required) | The **same** object passed to `mcpPlugin()`. |
 | `userCollection` | `string` | `'users'` | Collection holding user accounts. |
 | `disabled` | `boolean` | `false` | Turn OAuth off without uninstalling: no endpoints, no token wiring, `mcpPluginOptions` untouched (API-key MCP keeps working). Collections stay registered for schema consistency. Also auto-detected when `mcpPluginOptions.disabled` is set. |
-| `adminAccess` | `Access` | authenticated user in `userCollection` | Who may view/manage the OAuth collections in the admin. See below. |
+| `adminAccess` | `Access` | member of `userCollection` who passes the role check | Who may view/manage the OAuth collections in the admin. Honours a `role`/`isAdmin`/`roles` field when your collection has one. See below. |
 | `loginPath` | `string` | `routes.admin` + `admin.routes.login` | Where to send an unauthenticated user to sign in. Derived from your Payload config, so a custom admin or login route is picked up automatically. Set it only if sign-in lives outside the admin panel. |
 | `accessTokenTtlSeconds` | `number` | `3600` | Access-token lifetime. |
 | `refreshTokenTtlSeconds` | `number` | `86400` | Refresh-token lifetime. |
 | `authCodeTtlSeconds` | `number` | `300` | Authorization-code lifetime. |
 | `rateLimits` | `RateLimitOptions` | `{}` | Per-endpoint rate-limit overrides. Per-process and in-memory — see the caveat below. |
+
+### Scopes
+
+A client may request a narrowed grant with a space-separated `scope`, where each
+token is `<collection-or-global-slug>:<operation>`:
+
+| Scope token | Grants (collections) | Grants (globals) |
+|---|---|---|
+| `<slug>:read` | `find` | `find` |
+| `<slug>:write` | `create` + `update` | `update` |
+| `<slug>:delete` | `delete` | — (rejected) |
+
+```
+scope=posts:read posts:write media:read
+```
+
+**Requesting no scope grants everything the operator has enabled** — RFC 6749
+§3.3's pre-defined default, and what Claude.ai's Custom Connector does. The
+consent screen says which of the two is happening.
+
+Scope can only ever *narrow*:
+
+- Every operation a token names must be enabled on the server, or the whole
+  request is rejected with `invalid_scope` — there are no partial grants. A
+  collection with only `find` enabled offers `:read` and refuses `:write`.
+- The scope is validated at `/authorize`, re-validated at `/consent` (so
+  tampering with the hidden form field is caught), and resolved again when the
+  code is redeemed.
+- The granted capabilities are intersected with your **live** config on every
+  request, so disabling a collection narrows existing tokens on their next call
+  rather than when they expire.
+
+The exact set your server accepts is published in
+`/.well-known/oauth-authorization-server` as `scopes_supported`, derived from
+your `mcpPluginOptions` — so you never have to maintain the list by hand.
 
 ### Rate limits
 
@@ -341,10 +376,27 @@ group (alongside the MCP plugin's API Keys). `read`/`update`/`delete` are gated 
 minted by the token endpoint). `oauth-auth-codes` and `oauth-csrf-nonces` stay
 hidden and fully locked.
 
-The default `adminAccess` authorises any authenticated user **in your
-`userCollection`** and denies the public REST/GraphQL surface — correct for the
-standard starters, where `users` holds only operators. **If your `userCollection`
-mixes admins with untrusted end-users, pass your own rule:**
+The default `adminAccess` denies the public REST/GraphQL surface and authorises an
+authenticated user who is **in your `userCollection`** *and* passes an admin
+check that honours whichever role field your collection has:
+
+| Your user collection has | Default rule authorises |
+|---|---|
+| a `role` field | `role === 'admin'` |
+| an `isAdmin` field | `isAdmin === true` |
+| a `roles` array | `roles` includes `'admin'` |
+| none of the above | any member of the collection |
+
+So the standard Payload starters (no role field) are unaffected, while apps that
+already carry roles get the tighter gate automatically.
+
+⚠️ **If your operators carry a role other than `admin`** — `editor`, `owner`,
+`staff` — this default locks them out of the OAuth screens. Pass your own rule.
+
+⚠️ **If your `userCollection` mixes admins with untrusted end-users** and has no
+role field, the default reduces to "any logged-in user", who could then rewrite a
+client's `redirectUris` (→ auth-code theft) or revoke others' tokens. Pass your
+own rule:
 
 ```ts
 payloadMcpOAuth({
