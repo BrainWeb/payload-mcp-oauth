@@ -1,7 +1,43 @@
 import type { Plugin } from 'payload'
+import { definePlugin } from 'payload'
 import type { PayloadMcpOAuthConfig } from './types.js'
 import { buildPlugin, isPluginDisabled } from './plugin.js'
 import { installOverrideAuth } from './middleware/wrap-mcp.js'
+
+/**
+ * The slug this plugin registers under for cross-plugin discovery, mirroring
+ * `@payloadcms/plugin-mcp`'s own. We rely on that affordance to detect a copied
+ * `mcpPluginOptions` at boot, so it would be inconsistent not to offer it.
+ */
+export const PLUGIN_SLUG = 'plugin-mcp-oauth'
+
+// `definePlugin` supplies slug + order and exposes the caller's options on the
+// returned function as `.options`. It cannot own the whole factory: the plugin
+// function it builds runs during config build, which is far too late for
+// `installOverrideAuth` (see the note in payloadMcpOAuth below).
+const definedPlugin = definePlugin<Record<string, unknown>>({
+  slug: PLUGIN_SLUG,
+  order: 20,
+  plugin: (args) => {
+    // Drop the two keys definePlugin injects; everything else is our options.
+    const { config, plugins, ...options } = args
+    void plugins
+    return buildPlugin(config, options as unknown as PayloadMcpOAuthConfig)
+  },
+})
+
+/**
+ * Typed cross-plugin discovery: a plugin authored with `definePlugin` receives a
+ * slug-keyed `plugins` map, and this augmentation makes our entry come back as
+ * `{ options: PayloadMcpOAuthConfig }` rather than an untyped `Plugin`.
+ */
+declare module 'payload' {
+  // Must be an `interface` (not a type alias) — module augmentation only merges
+  // into interfaces.
+  interface RegisteredPlugins {
+    'plugin-mcp-oauth': PayloadMcpOAuthConfig
+  }
+}
 
 export type { PayloadMcpOAuthConfig, ResolvedConfig } from './types.js'
 export { PayloadMcpOAuthError, OAuthInvalidTokenError } from './types.js'
@@ -40,8 +76,9 @@ export function payloadMcpOAuth(options: PayloadMcpOAuthConfig): Plugin {
     installOverrideAuth(options.mcpPluginOptions, options.userCollection ?? 'users')
   }
 
-  const fn: Plugin = (incomingConfig) => buildPlugin(incomingConfig, options)
-  // mcpPlugin uses definePlugin with order:10; we must run after it
-  fn.order = 20
-  return fn
+  // mcpPlugin uses definePlugin with order:10; ours is 20, so we run after it.
+  // `definePlugin` spreads our options into a fresh object for the plugin call,
+  // but `mcpPluginOptions` is copied by reference, so the identity the OAuth
+  // wiring depends on is preserved.
+  return definedPlugin(options as unknown as Record<string, unknown>)
 }
