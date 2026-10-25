@@ -70,8 +70,10 @@ async function accessTokenFor(scope: string): Promise<string> {
   return String(body['access_token'])
 }
 
-/** The tool names plugin-mcp registers for a bearer token. */
-async function listTools(token: string): Promise<string[]> {
+type Tool = { name: string; inputSchema?: { properties?: Record<string, unknown> } }
+
+/** The tools plugin-mcp registers for a bearer token, keyed by name. */
+async function listTools(token: string): Promise<Map<string, Tool>> {
   const res = await call('/api/mcp', {
     method: 'POST',
     headers: {
@@ -91,8 +93,8 @@ async function listTools(token: string): Promise<string[]> {
         .map((line) => line.slice('data:'.length).trim())
         .join('')
     : text
-  const parsed = JSON.parse(json) as { result?: { tools?: Array<{ name: string }> } }
-  return (parsed.result?.tools ?? []).map((t) => t.name).sort()
+  const parsed = JSON.parse(json) as { result?: { tools?: Tool[] } }
+  return new Map((parsed.result?.tools ?? []).map((t) => [t.name, t]))
 }
 
 beforeAll(async () => {
@@ -133,14 +135,22 @@ describe('example app: scoped grants reach plugin-mcp as tools', () => {
 
   it('registers updateUsers but not createUsers for users:write', async () => {
     const tools = await listTools(await accessTokenFor('users:write'))
-    expect(tools).toContain('updateUsers')
-    expect(tools).not.toContain('createUsers')
-    expect(tools).not.toContain('findUsers')
+    expect([...tools.keys()]).toEqual(['updateUsers'])
   })
 
   it('registers createMedia but not updateMedia for media:write', async () => {
     const tools = await listTools(await accessTokenFor('media:write'))
-    expect(tools).toContain('createMedia')
-    expect(tools).not.toContain('updateMedia')
+    expect([...tools.keys()]).toEqual(['createMedia'])
+  })
+
+  it('builds real input schemas, not the permissive fallback', async () => {
+    // plugin-mcp converts each collection's JSON schema to zod at runtime and
+    // falls back to an empty passthrough object if that fails. The root
+    // package.json overrides its zod 3 dependency to zod 4 (no patched zod 3
+    // exists), so this guards against that override silently breaking it.
+    const users = await listTools(await accessTokenFor('users:write'))
+    expect(Object.keys(users.get('updateUsers')?.inputSchema?.properties ?? {})).toContain('email')
+    const media = await listTools(await accessTokenFor('media:write'))
+    expect(Object.keys(media.get('createMedia')?.inputSchema?.properties ?? {})).toContain('alt')
   })
 })

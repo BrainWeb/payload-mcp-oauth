@@ -28,7 +28,7 @@ unchanged.
 | | Version |
 |---|---|
 | `payload` | `^3.0.0` |
-| `@payloadcms/plugin-mcp` | `^3.0.0` (tested 3.85.0) |
+| `@payloadcms/plugin-mcp` | `^3.0.0` (tested 3.91.0) |
 | `next` | `^14 \|\| ^15 \|\| ^16` (only for the exported proxy/middleware) |
 | Node | `>= 20` |
 
