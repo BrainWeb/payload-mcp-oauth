@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MCPPluginConfig } from '@payloadcms/plugin-mcp'
-import { makeAuthorizeHandler, readRegisteredUris } from '../../../src/endpoints/authorize.js'
+import { describeScope, makeAuthorizeHandler, readRegisteredUris } from '../../../src/endpoints/authorize.js'
 import { verifyCsrfToken } from '../../../src/lib/csrf.js'
 
 process.env['PMOAUTH_TOKEN_PEPPER'] = 'test-pepper-32-chars-minimum-length!!'
@@ -211,6 +211,20 @@ describe('makeAuthorizeHandler', () => {
     expect(html).toContain('Only the capabilities listed above will be granted')
   })
 
+  it('labels media:write on an update-only collection without mentioning uploads', async () => {
+    const opts: MCPPluginConfig = {
+      collections: { media: { enabled: { find: true, update: true } as never } },
+    }
+    const res = await makeAuthorizeHandler({ mcpPluginOptions: opts })(
+      makeReq({ ...VALID_QUERY, scope: 'media:write' }, { id: 'user-1' }) as never,
+    )
+    expect(res.status).toBe(200)
+    const html = await res.text()
+    expect(html).toContain('<li>Update media</li>')
+    expect(html).not.toMatch(/upload/i)
+    expect(html).not.toMatch(/create/i)
+  })
+
   it('accepts empty scope without scope validation and shows the full-grant note', async () => {
     const res = await makeAuthorizeHandler({ mcpPluginOptions: MCP_OPTIONS })(
       makeReq({ ...VALID_QUERY, scope: undefined }, { id: 'user-1' }) as never,
@@ -218,6 +232,32 @@ describe('makeAuthorizeHandler', () => {
     expect(res.status).toBe(200)
     const html = await res.text()
     expect(html).toMatch(/all tools enabled on this server/i)
+  })
+})
+
+describe('describeScope', () => {
+  const opts: MCPPluginConfig = {
+    collections: {
+      posts: { enabled: true },
+      media: { enabled: { find: true, update: true } as never },
+      'blog-posts': { enabled: { find: true, create: true } as never },
+    },
+    globals: { settings: { enabled: true } },
+  }
+
+  it('names the operations the token actually grants', () => {
+    expect(describeScope('posts:read', opts)).toBe('Read posts')
+    expect(describeScope('posts:write', opts)).toBe('Create and update posts')
+    expect(describeScope('posts:delete', opts)).toBe('Delete posts')
+    expect(describeScope('media:write', opts)).toBe('Update media')
+    expect(describeScope('blog-posts:write', opts)).toBe('Create blog posts')
+    expect(describeScope('settings:write', opts)).toBe('Update settings')
+  })
+
+  it('falls back to the raw token when the grant is unknown or invalid', () => {
+    expect(describeScope('media:write')).toBe('media:write')
+    expect(describeScope('media:delete', opts)).toBe('media:delete')
+    expect(describeScope('openid', opts)).toBe('openid')
   })
 })
 

@@ -12,8 +12,12 @@ import type { MCPPluginConfig } from '@payloadcms/plugin-mcp'
 const MCP_OPTIONS: MCPPluginConfig = {
   collections: {
     posts: { enabled: true },
-    media: { enabled: { find: true, create: true } as never },
+    // Update without create: an upload collection whose files cannot go over MCP.
+    media: { enabled: { find: true, update: true } as never },
+    // Create without update.
+    inbox: { enabled: { find: true, create: true } as never },
     'read-only': { enabled: { find: true } as never },
+    'all-ops': { enabled: { find: true, create: true, update: true } as never },
     'blog-posts': { enabled: true },
   },
   globals: {
@@ -53,7 +57,7 @@ describe('buildFullCapabilities', () => {
 
   it('spreads partial object capabilities for collections', () => {
     const caps = buildFullCapabilities(MCP_OPTIONS)
-    expect(caps['media']).toEqual({ find: true, create: true })
+    expect(caps['media']).toEqual({ find: true, update: true })
   })
 
   it('grants full ops for globals with enabled: true', () => {
@@ -107,21 +111,36 @@ describe('scopeToCapabilities — collection scopes', () => {
     expect(caps(r)['posts']).toEqual({ delete: true })
   })
 
-  it('rejects write when any required op is not enabled (no partial widening)', () => {
-    // media has find+create only; write needs create+update — update not enabled
-    const r = scopeToCapabilities('media:write', MCP_OPTIONS)
-    expect(invalid(r)).toContain('media:write')
+  it('grants write as update only on a collection with update but no create', () => {
+    // The media case: uploads cannot go over MCP, so the operator enables
+    // { find, update }. write must still grant update, and must not add create.
+    expect(scopeToCapabilities('media:write', MCP_OPTIONS)).toEqual({
+      kind: 'scoped',
+      capabilities: { media: { update: true } },
+    })
   })
 
-  it('accepts write when all required ops are enabled', () => {
-    // posts has all ops enabled
-    const r = scopeToCapabilities('posts:write', MCP_OPTIONS)
-    expect(r.kind).toBe('scoped')
+  it('grants write as create only on a collection with create but no update', () => {
+    expect(scopeToCapabilities('inbox:write', MCP_OPTIONS)).toEqual({
+      kind: 'scoped',
+      capabilities: { inbox: { create: true } },
+    })
   })
 
-  it('rejects write for a read-only collection (no create/update)', () => {
-    const r = scopeToCapabilities('read-only:write', MCP_OPTIONS)
-    expect(r.kind).toBe('invalid')
+  it('grants write as create and update when both are enabled', () => {
+    expect(caps(scopeToCapabilities('posts:write', MCP_OPTIONS))['posts']).toEqual({ create: true, update: true })
+    expect(caps(scopeToCapabilities('all-ops:write', MCP_OPTIONS))['allOps']).toEqual({ create: true, update: true })
+  })
+
+  it('rejects write for a read-only collection (neither create nor update)', () => {
+    expect(invalid(scopeToCapabilities('read-only:write', MCP_OPTIONS))).toEqual(['read-only:write'])
+  })
+
+  it('treats an explicitly false op as disabled for write', () => {
+    const opts: MCPPluginConfig = {
+      collections: { media: { enabled: { find: true, create: false, update: true } as never } },
+    }
+    expect(caps(scopeToCapabilities('media:write', opts))['media']).toEqual({ update: true })
   })
 
   it('converts hyphenated slug to camelCase key', () => {
@@ -291,12 +310,22 @@ describe('buildSupportedScopes', () => {
     expect(scopes).toEqual(['posts:read', 'posts:write', 'posts:delete'])
   })
 
-  it('omits operations the operator has not enabled', () => {
-    // media has find+create; write needs create AND update, so it is not offered.
+  it('offers write on a collection with update but no create', () => {
+    const scopes = buildSupportedScopes({
+      collections: { media: { enabled: { find: true, update: true } as never } },
+    })
+    expect(scopes).toEqual(['media:read', 'media:write'])
+  })
+
+  it('offers write on a collection with create but no update', () => {
+    expect(buildSupportedScopes(MCP_OPTIONS)).toContain('inbox:write')
+  })
+
+  it('omits write and delete on a read-only collection', () => {
     const scopes = buildSupportedScopes(MCP_OPTIONS)
-    expect(scopes).toContain('media:read')
-    expect(scopes).not.toContain('media:write')
-    expect(scopes).not.toContain('media:delete')
+    expect(scopes).toContain('read-only:read')
+    expect(scopes).not.toContain('read-only:write')
+    expect(scopes).not.toContain('read-only:delete')
   })
 
   it('offers globals read and write but never delete', () => {

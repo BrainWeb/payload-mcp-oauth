@@ -123,10 +123,14 @@ export type ScopeResult =
  *
  * Scope token format: "<collectionSlug>:<op>" or "<globalSlug>:<op>"
  *   read   → { find: true }
- *   write  → collections: { create: true, update: true }; globals: { update: true }
+ *   write  → collections: whichever of { create, update } is enabled; globals: { update: true }
  *   delete → collections only: { delete: true }
  *
- * All requested operations must be enabled on the server — no partial grants.
+ * `read`, `delete` and global `write` name a single operation, which must be
+ * enabled. Collection `write` covers two, and a collection may enable only one
+ * of them (an upload collection whose files cannot travel over MCP is typically
+ * `{ find, update }`), so it grants the enabled subset and is invalid only when
+ * neither is enabled. It never grants an operation the operator has not enabled.
  * An unknown slug, unknown operation, or disabled operation returns invalid_scope.
  *
  * Empty/absent scope returns `{ kind: 'full' }` — the caller resolves that to
@@ -164,13 +168,8 @@ export function scopeToCapabilities(
         colCfg.enabled === true
           ? { find: true, create: true, update: true, delete: true }
           : (colCfg.enabled as Record<string, boolean>)
-      const requestedOps = collectionOpsFor(op)
+      const requestedOps = grantedCollectionOps(op, enabledOps)
       if (!requestedOps) {
-        invalidScopes.push(token)
-        continue
-      }
-      // All requested ops must be enabled (no partial widening)
-      if (!Object.entries(requestedOps).every(([k, v]) => !v || enabledOps[k])) {
         invalidScopes.push(token)
         continue
       }
@@ -221,40 +220,51 @@ export function scopeToCapabilities(
 export function buildSupportedScopes(mcpPluginOptions: MCPPluginConfig): string[] {
   const scopes: string[] = []
 
-  const add = (
-    slug: string,
-    op: string,
-    enabledOps: Record<string, boolean>,
-    required: Record<string, boolean> | null,
-  ) => {
-    if (!required) return
-    // Same "all requested ops must be enabled" rule scopeToCapabilities applies.
-    if (Object.entries(required).every(([k, v]) => !v || enabledOps[k])) scopes.push(`${slug}:${op}`)
-  }
-
   for (const [slug, cfg] of Object.entries(mcpPluginOptions.collections ?? {})) {
     if (!cfg?.enabled) continue
     const enabledOps: Record<string, boolean> =
       cfg.enabled === true
         ? { find: true, create: true, update: true, delete: true }
         : (cfg.enabled as Record<string, boolean>)
-    for (const op of ['read', 'write', 'delete']) add(slug, op, enabledOps, collectionOpsFor(op))
+    // Same per-operation rule scopeToCapabilities applies.
+    for (const op of ['read', 'write', 'delete']) {
+      if (grantedCollectionOps(op, enabledOps)) scopes.push(`${slug}:${op}`)
+    }
   }
 
   for (const [slug, cfg] of Object.entries(mcpPluginOptions.globals ?? {})) {
     if (!cfg?.enabled) continue
     const enabledOps: Record<string, boolean> =
       cfg.enabled === true ? { find: true, update: true } : (cfg.enabled as Record<string, boolean>)
-    for (const op of ['read', 'write']) add(slug, op, enabledOps, globalOpsFor(op))
+    for (const op of ['read', 'write']) {
+      const required = globalOpsFor(op)
+      if (required && Object.entries(required).every(([k, v]) => !v || enabledOps[k])) scopes.push(`${slug}:${op}`)
+    }
   }
 
   return scopes
 }
 
-function collectionOpsFor(op: string): Record<string, boolean> | null {
-  if (op === 'read') return { find: true }
-  if (op === 'write') return { create: true, update: true }
-  if (op === 'delete') return { delete: true }
+/**
+ * The operations a collection scope token grants, given what the operator has
+ * enabled, or `null` when the token grants nothing and must be rejected.
+ *
+ * `write` grants the enabled subset of `create` and `update`, so a collection
+ * configured `{ find, update }` can still be edited under a scoped grant. The
+ * result only ever contains operations that are enabled, so it cannot widen.
+ */
+function grantedCollectionOps(
+  op: string,
+  enabledOps: Record<string, boolean>,
+): Record<string, boolean> | null {
+  if (op === 'read') return enabledOps['find'] ? { find: true } : null
+  if (op === 'delete') return enabledOps['delete'] ? { delete: true } : null
+  if (op === 'write') {
+    const ops: Record<string, boolean> = {}
+    if (enabledOps['create']) ops['create'] = true
+    if (enabledOps['update']) ops['update'] = true
+    return Object.keys(ops).length > 0 ? ops : null
+  }
   return null
 }
 

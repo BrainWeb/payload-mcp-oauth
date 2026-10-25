@@ -5,16 +5,35 @@ import { validateCodeChallenge } from '../lib/pkce.js'
 import { scopeToCapabilities } from '../lib/scope.js'
 import { oauthErrorResponse, redirectResponse } from './helpers.js'
 
-const SCOPE_LABELS: Record<string, string> = {
-  'posts:read': 'Read posts',
-  'posts:write': 'Create and update posts',
-  'posts:delete': 'Delete posts',
-  'media:read': 'Read media files',
-  'media:write': 'Upload and manage media',
-  'users:read': 'Read user profiles',
-  openid: 'Confirm your identity',
-  profile: 'Access your profile information',
-  email: 'Access your email address',
+/** Consent-page verbs for each MCP operation, in the order they are listed. */
+const OP_VERBS: ReadonlyArray<readonly [string, string]> = [
+  ['find', 'read'],
+  ['create', 'create'],
+  ['update', 'update'],
+  ['delete', 'delete'],
+]
+
+/**
+ * The consent-page label for one scope token, built from the operations it
+ * actually grants on this server.
+ *
+ * A fixed label per token cannot be right: collection `write` grants whichever
+ * of create and update the operator has enabled, so `media:write` on an
+ * update-only collection must not promise uploads. Without the MCP options the
+ * grant is unknown (and the page says everything is granted), so the raw token
+ * is shown.
+ */
+export function describeScope(token: string, mcpPluginOptions?: MCPPluginConfig): string {
+  if (!mcpPluginOptions) return token
+  const result = scopeToCapabilities(token, mcpPluginOptions)
+  if (result.kind !== 'scoped') return token
+  const [ops] = Object.values(result.capabilities) as Array<Record<string, unknown> | undefined>
+  // eslint-disable-next-line security/detect-object-injection -- op comes from the fixed OP_VERBS list
+  const verbs = OP_VERBS.filter(([op]) => ops?.[op] === true).map(([, verb]) => verb)
+  if (verbs.length === 0) return token
+  const phrase = verbs.join(' and ')
+  const noun = token.slice(0, token.indexOf(':')).replace(/[-_]+/g, ' ')
+  return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)} ${noun}`
 }
 
 function e(s: string): string {
@@ -34,14 +53,14 @@ function buildConsentHtml(p: {
   csrfToken: string
   csrfNonce: string
   consentPath: string
-  scopeEnforced: boolean
+  mcpPluginOptions: MCPPluginConfig | undefined
 }): string {
   const hasScope = p.scope.trim().length > 0
   const labels = hasScope
-    ? p.scope.split(/\s+/).filter(Boolean).map((s) => SCOPE_LABELS[s] ?? s)
+    ? p.scope.split(/\s+/).filter(Boolean).map((s) => describeScope(s, p.mcpPluginOptions))
     : ['All tools enabled on this server']
   const items = labels.map((l) => `<li>${e(l)}</li>`).join('')
-  const note = hasScope && p.scopeEnforced
+  const note = hasScope && p.mcpPluginOptions
     ? 'Only the capabilities listed above will be granted, on your behalf. Only approve applications you trust.'
     : 'Approving grants the application access to <strong>all tools enabled on this server</strong>, on your behalf. Only approve applications you trust.'
   return `<!DOCTYPE html><html lang="en"><head>
@@ -235,7 +254,7 @@ export function makeAuthorizeHandler(options: AuthorizeHandlerOptions = {}): Pay
     const csrfToken = makeCsrfToken(userId, clientId, redirectUri, codeChallenge)
     const csrfNonce = await storeCsrfNonce(req.payload, userId)
 
-    return new Response(buildConsentHtml({ clientName, scope, clientId, redirectUri, codeChallenge, codeChallengeMethod, state, userId, resource, csrfToken, csrfNonce, consentPath, scopeEnforced: !!mcpPluginOptions }), {
+    return new Response(buildConsentHtml({ clientName, scope, clientId, redirectUri, codeChallenge, codeChallengeMethod, state, userId, resource, csrfToken, csrfNonce, consentPath, mcpPluginOptions }), {
       status: 200,
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
