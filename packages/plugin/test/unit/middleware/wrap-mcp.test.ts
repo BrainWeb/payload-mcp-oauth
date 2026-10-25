@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { installOverrideAuth, wrapMcpEndpointHandler } from '../../../src/middleware/wrap-mcp.js'
+import { scopeToCapabilities } from '../../../src/lib/scope.js'
 import { OAuthInvalidTokenError } from '../../../src/types.js'
 import { UnauthorizedError } from 'payload'
 
@@ -214,6 +215,24 @@ describe('installOverrideAuth', () => {
     expect(result['posts']).toEqual({ find: true })
     // media was never granted, so it must not appear even though it is enabled.
     expect(result['media']).toBeUndefined()
+  })
+
+  it('resolves a stored media:write grant on an update-only collection to update alone', async () => {
+    // media is { find, update }: uploads cannot go over MCP. The stored grant is
+    // built by the same scopeToCapabilities call the token endpoint makes.
+    const opts = {
+      collections: { media: { enabled: { find: true, update: true } as never } },
+    } as Parameters<typeof installOverrideAuth>[0]
+    installOverrideAuth(opts, 'users')
+
+    const granted = scopeToCapabilities('media:write', opts)
+    if (granted.kind !== 'scoped') throw new Error(`expected kind "scoped", got "${granted.kind}"`)
+    const req = makeTokenReq(makeAccessTokenDoc({ scope: 'media:write', capabilities: granted.capabilities }))
+    const result = (await opts.overrideAuth!(req as never, vi.fn())) as Record<string, unknown>
+
+    // plugin-mcp registers updateMedia for a truthy `update` and createMedia for
+    // a truthy `create`, so this is updateMedia without createMedia or findMedia.
+    expect(result['media']).toEqual({ update: true })
   })
 
   it('narrows a stored grant to the live config when the operator disables an operation', async () => {

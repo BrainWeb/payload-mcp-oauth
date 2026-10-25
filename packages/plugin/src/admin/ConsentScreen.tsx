@@ -19,7 +19,7 @@ function scopeToLabel(scope: string): string {
     'posts:write': 'Create and update posts',
     'posts:delete': 'Delete posts',
     'media:read': 'Read media files',
-    'media:write': 'Upload and manage media',
+    'media:write': 'Create or update media',
     'users:read': 'Read user profiles',
     openid: 'Confirm your identity',
     profile: 'Access your profile information',

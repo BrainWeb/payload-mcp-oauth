@@ -1,6 +1,6 @@
 {
   "name": "@brainwebuk/payload-plugin-mcp-oauth",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "license": "MIT",
   "author": {
     "name": "Richard Wood",
@@ -58,11 +58,11 @@
     }
   },
   "devDependencies": {
-    "payload": "3.85.0",
-    "@payloadcms/plugin-mcp": "3.85.0",
+    "payload": "3.91.0",
+    "@payloadcms/plugin-mcp": "3.91.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "next": "16.2.11",
+    "next": "16.4.2",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "tsup": "8.3.5",

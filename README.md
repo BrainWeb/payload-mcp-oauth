@@ -28,7 +28,7 @@ unchanged.
 | | Version |
 |---|---|
 | `payload` | `^3.0.0` |
-| `@payloadcms/plugin-mcp` | `^3.0.0` (tested 3.85.0) |
+| `@payloadcms/plugin-mcp` | `^3.0.0` (tested 3.91.0) |
 | `next` | `^14 \|\| ^15 \|\| ^16` (only for the exported proxy/middleware) |
 | Node | `>= 20` |
 
@@ -324,7 +324,7 @@ token is `<collection-or-global-slug>:<operation>`:
 | Scope token | Grants (collections) | Grants (globals) |
 |---|---|---|
 | `<slug>:read` | `find` | `find` |
-| `<slug>:write` | `create` + `update` | `update` |
+| `<slug>:write` | whichever of `create` and `update` is enabled | `update` |
 | `<slug>:delete` | `delete` | — (rejected) |
 
 ```
@@ -338,7 +338,10 @@ consent screen says which of the two is happening.
 Scope can only ever *narrow*:
 
 - Every operation a token names must be enabled on the server, or the whole
-  request is rejected with `invalid_scope` — there are no partial grants. A
+  request is rejected with `invalid_scope`. The one exception is collection
+  `:write`, which covers two operations: it grants whichever of `create` and
+  `update` is enabled, so a collection configured `{ find, update }` (an upload
+  collection whose files cannot go over MCP, say) gets `update` alone. A
   collection with only `find` enabled offers `:read` and refuses `:write`.
 - The scope is validated at `/authorize`, re-validated at `/consent` (so
   tampering with the hidden form field is caught), and resolved again when the
